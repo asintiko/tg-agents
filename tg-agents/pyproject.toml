@@ -1,0 +1,56 @@
+[project]
+name = "tg-agents"
+version = "0.1.0"
+description = "Monorepo with FastAPI API, worker, and Next.js admin panel."
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.5",
+    "uvicorn>=0.30.0",
+    "pydantic-settings>=2.6.0",
+    "sqlalchemy[asyncio]>=2.0.25",
+    "asyncpg>=0.29.0",
+    "aiosqlite>=0.19.0",
+    "redis>=5.0.0",
+    "alembic>=1.13.0",
+    "cryptography>=42.0.0",
+    "python-json-logger>=2.0.7",
+    "pyjwt>=2.9.0",
+    "feedparser>=6.0.11",
+    "apscheduler>=3.10.4",
+    "google-generativeai>=0.8.2",
+    "telethon>=1.34.0",
+    "httpx>=0.28.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.23.3",
+    "mypy>=1.10.0",
+    "ruff>=0.6.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [
+    "apps/web/.next",
+    "apps/web/node_modules",
+    ".venv",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["apps/api", "apps/worker"]
+ignore_missing_imports = true
+disallow_untyped_defs = true
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+[tool.pytest.ini_options]
+testpaths = ["apps/api/tests", "apps/worker/tests"]
+pythonpath = ["."]

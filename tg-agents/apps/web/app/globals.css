@@ -1,0 +1,141 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+
+:root {
+  --bg: #0f172a;
+  --panel: #111827;
+  --muted: #94a3b8;
+  --border: rgba(255, 255, 255, 0.06);
+  --primary: #38bdf8;
+  --primary-hover: #0ea5e9;
+  --danger: #ef4444;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', system-ui, sans-serif;
+  background: radial-gradient(circle at 10% 20%, rgba(56, 189, 248, 0.12), transparent 25%),
+    radial-gradient(circle at 90% 10%, rgba(94, 234, 212, 0.12), transparent 25%),
+    var(--bg);
+  color: #e2e8f0;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+main {
+  min-height: 100vh;
+  padding: 32px;
+}
+
+.shell {
+  max-width: 1100px;
+  margin: 0 auto;
+  display: flex;
+  gap: 20px;
+}
+
+.sidebar {
+  width: 220px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  position: sticky;
+  top: 24px;
+  height: fit-content;
+}
+
+.content {
+  flex: 1;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: 0 20px 45px rgba(0, 0, 0, 0.25);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: none;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--primary);
+  color: #0b1224;
+}
+
+.btn.secondary {
+  background: #1f2937;
+  color: #e5e7eb;
+}
+
+.btn.danger {
+  background: var(--danger);
+  color: #fff;
+}
+
+.grid {
+  display: grid;
+  gap: 12px;
+}
+
+.card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  background: #0b1020;
+}
+
+.input {
+  background: #0b1224;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: #e5e7eb;
+  width: 100%;
+}
+
+.label {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.row {
+  display: flex;
+  gap: 12px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th,
+.table td {
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+.badge {
+  display: inline-flex;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: #1f2937;
+  color: #e5e7eb;
+  font-size: 12px;
+}
