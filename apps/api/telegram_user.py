@@ -9,6 +9,8 @@ from typing import Any
 from telethon import TelegramClient
 from telethon.errors import (
     AuthKeyUnregisteredError,
+    PhoneCodeExpiredError,
+    PhoneCodeInvalidError,
     PasswordHashInvalidError,
     SessionPasswordNeededError,
 )
@@ -152,6 +154,9 @@ async def wait_for_qr(settings: Settings | None = None) -> dict[str, Any]:
 
 async def start_phone_login(phone: str, settings: Settings | None = None) -> dict[str, Any]:
     settings = settings or get_settings()
+    phone = phone.strip()
+    if not phone:
+        raise ValueError("Phone number is required for login")
     _ensure_creds(settings)
     global _pending
     global _pending_phone
@@ -177,7 +182,11 @@ async def start_phone_login(phone: str, settings: Settings | None = None) -> dic
         _write_status(settings, "connected", me)
         return {"status": "connected", "me": _serialize_me(me)}
 
-    sent = await client.send_code_request(phone)
+    try:
+        sent = await client.send_code_request(phone)
+    except Exception:
+        await client.disconnect()
+        raise
     _pending_phone = PendingPhone(
         client=client,
         phone=phone,
@@ -193,7 +202,13 @@ async def provide_phone_code(code: str, settings: Settings | None = None) -> dic
     if not _pending_phone:
         raise ValueError("Код не ожидается, запустите вход по номеру заново")
     try:
-        await _pending_phone.client.sign_in(code=code)
+        if not _pending_phone.client.is_connected():
+            await _pending_phone.client.connect()
+        await _pending_phone.client.sign_in(
+            phone=_pending_phone.phone,
+            code=code,
+            phone_code_hash=_pending_phone.code_hash or None,
+        )
         me = await _pending_phone.client.get_me()
         _write_status(settings, "connected", me)
         return {"status": "connected", "me": _serialize_me(me)}
@@ -201,6 +216,16 @@ async def provide_phone_code(code: str, settings: Settings | None = None) -> dic
         _pending_phone.awaiting_password = True
         _write_status(settings, "password_required")
         return {"status": "password_required"}
+    except PhoneCodeInvalidError as exc:
+        await _pending_phone.client.disconnect()
+        _pending_phone = None
+        _write_status(settings, "disconnected")
+        raise ValueError("Неверный код из Telegram, запросите новый.") from exc
+    except PhoneCodeExpiredError as exc:
+        await _pending_phone.client.disconnect()
+        _pending_phone = None
+        _write_status(settings, "disconnected")
+        raise ValueError("Срок действия кода истёк, отправьте запрос ещё раз.") from exc
     except Exception as exc:  # noqa: BLE001
         await _pending_phone.client.disconnect()
         _pending_phone = None
@@ -220,11 +245,15 @@ async def provide_password(password: str, settings: Settings | None = None) -> d
         raise ValueError("Текущая сессия не ждёт пароль, перезапустите вход")
     try:
         if _pending and _pending.awaiting_password:
+            if not _pending.client.is_connected():
+                await _pending.client.connect()
             await _pending.client.sign_in(password=password)
             me = await _pending.client.get_me()
             _write_status(settings, "connected", me)
             return {"status": "connected", "me": _serialize_me(me)}
         if _pending_phone and _pending_phone.awaiting_password:
+            if not _pending_phone.client.is_connected():
+                await _pending_phone.client.connect()
             await _pending_phone.client.sign_in(password=password)
             me = await _pending_phone.client.get_me()
             _write_status(settings, "connected", me)

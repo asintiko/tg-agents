@@ -29,6 +29,11 @@ export type TelegramStatus = {
     channels: number;
     last_connected_at: string | null;
 };
+export type TelegramAuthInfo = {
+  status: string;
+  last_connected_at?: string | null;
+  me?: { id: number | null; username: string | null; phone: string | null } | null;
+};
 export type TelegramChannel = {
     id: number;
     project_id: number;
@@ -162,7 +167,7 @@ export const TelegramApi = {
     }),
 };
 export const TelegramGlobalApi = {
-  status: () => apiFetch<{ status: string; last_connected_at?: string | null; me?: { id: number; username: string | null; phone: string | null } | null }>("/api/telegram/status"),
+  status: () => apiFetch<TelegramAuthInfo>("/api/telegram/status"),
   startQr: () => apiFetch<{ status: string; qr_url?: string | null }>("/api/telegram/qr/start", { method: "POST" }),
   waitQr: () => apiFetch<{ status: string; me?: any; qr_url?: string | null }>("/api/telegram/qr/wait", { method: "POST" }),
   password: (password: string) =>
