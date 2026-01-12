@@ -24,6 +24,7 @@ from apps.api.models import (
     ConnectionStatus,
     FeedSource,
     NewsItem,
+    Niche,
     Post,
     PostStatus,
     Project,

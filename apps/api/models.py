@@ -8,6 +8,7 @@ from sqlalchemy import (
     Boolean,
     Column,
     DateTime,
+    event,
     Enum,
     ForeignKey,
     Index,
@@ -20,6 +21,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
+from .time_utils import to_utc
 
 
 class Niche(str, enum.Enum):
@@ -256,3 +258,21 @@ class ImageCache(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+def _normalize_dt(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    return to_utc(dt)
+
+
+@event.listens_for(Post, "before_insert", propagate=True)
+def _post_before_insert(_: object, __: object, target: Post) -> None:
+    target.planned_at = _normalize_dt(target.planned_at)
+    target.published_at = _normalize_dt(target.published_at)
+
+
+@event.listens_for(Post, "before_update", propagate=True)
+def _post_before_update(_: object, __: object, target: Post) -> None:
+    target.planned_at = _normalize_dt(target.planned_at)
+    target.published_at = _normalize_dt(target.published_at)

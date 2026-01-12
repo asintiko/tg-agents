@@ -1,59 +1,61 @@
-# tg-agents (Telethon user-only)
+п»ї# tg-agents (Telethon user-only)
 
-Единый стек: FastAPI API + worker (APScheduler, RSS, Telethon) + Next.js админка. Работает только через пользовательский аккаунт Telegram (Telethon, вход по QR/2FA). Таймзона — Europe/Moscow.
+Р•РґРёРЅС‹Р№ СЃС‚РµРє: FastAPI API + worker (APScheduler, RSS, Telethon) + Next.js Р°РґРјРёРЅРєР°. Р Р°Р±РѕС‚Р°РµС‚ С‚РѕР»СЊРєРѕ С‡РµСЂРµР· РїРѕР»СЊР·РѕРІР°С‚РµР»СЊСЃРєРёР№ Р°РєРєР°СѓРЅС‚ Telegram (Telethon, РІС…РѕРґ РїРѕ QR/2FA). РўР°Р№РјР·РѕРЅР° - Europe/Moscow.
 
-## Структура
-- `apps/api` — FastAPI, Alembic, эндпоинты `/health`, `/ready`.
-- `apps/worker` — планировщик (MSK), RSS, генерация/публикация постов.
-- `apps/web` — Next.js админка (RU).
-- `docker-compose.yml` — postgres, redis, api, worker, web.
-- `docs/` — вспомогательные файлы (DIAGNOSTICS и др.).
-- `legacy/` — старые файлы, не используются compose.
+## РЎС‚СЂСѓРєС‚СѓСЂР°
+- `apps/api` - FastAPI, Alembic, СЌРЅРґРїРѕРёРЅС‚С‹ `/health`, `/ready`.
+- `apps/worker` - РїР»Р°РЅРёСЂРѕРІС‰РёРє (MSK), RSS, РіРµРЅРµСЂР°С†РёСЏ/РїСѓР±Р»РёРєР°С†РёСЏ РїРѕСЃС‚РѕРІ.
+- `apps/web` - Next.js Р°РґРјРёРЅРєР° (RU).
+- `docker-compose.yml` - postgres, redis, api, worker, web.
+- `docs/` - РІСЃРїРѕРјРѕРіР°С‚РµР»СЊРЅС‹Рµ С„Р°Р№Р»С‹ (DIAGNOSTICS Рё РґСЂ.).
+- `legacy/` - СЃС‚Р°СЂС‹Рµ С„Р°Р№Р»С‹, РЅРµ РёСЃРїРѕР»СЊР·СѓСЋС‚СЃСЏ compose.
 
-## Подготовка окружения
-1. Скопируйте `.env.example` > `.env`.
-2. Заполните: `TELETHON_API_ID`, `TELETHON_API_HASH`, `ADMIN_PASSWORD`, при необходимости `GEMINI_API_KEY`.
-3. Порты снаружи: API 8001, Web 3001 (`NEXT_PUBLIC_API_BASE_URL` по умолчанию `http://localhost:8001`).
+## РџРѕРґРіРѕС‚РѕРІРєР° РѕРєСЂСѓР¶РµРЅРёСЏ
+1. РЎРєРѕРїРёСЂСѓР№С‚Рµ `.env.example` > `.env`.
+2. Р—Р°РїРѕР»РЅРёС‚Рµ: `TELETHON_API_ID`, `TELETHON_API_HASH`, `ADMIN_PASSWORD`, РїСЂРё РЅРµРѕР±С…РѕРґРёРјРѕСЃС‚Рё `GEMINI_API_KEY`.
+3. РџРѕСЂС‚С‹ СЃРЅР°СЂСѓР¶Рё: API 8001, Web 3001 (`NEXT_PUBLIC_API_BASE_URL` РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ `http://localhost:8001`).
+4. РќРµ РєРѕРјРјРёС‚СЊС‚Рµ `node_modules`; СЃР±РѕСЂРєР° Docker РёСЃРїРѕР»СЊР·СѓРµС‚ `npm ci`.
+5. Р’СЃРµ РёСЃС…РѕРґРЅС‹Рµ С„Р°Р№Р»С‹ РґРѕР»Р¶РЅС‹ Р±С‹С‚СЊ РІ UTF-8; РЅРµ СЃРѕС…СЂР°РЅСЏР№С‚Рµ TSX/MD РІ UTF-16.
 
-## Запуск (Docker Desktop, Windows)
+## Р—Р°РїСѓСЃРє (Docker Desktop, Windows)
 ```powershell
 docker compose up --build --detach
 ```
 - API: http://localhost:8001/health
 - Web: http://localhost:3001
-- Volume `postgres_data` — база; `shared_data` > `/data` (Telethon-сессии, вложения).
-- Если 8001/3001 заняты на хосте Docker Desktop — меняйте только левую часть маппинга в `docker-compose.yml`, внутренние порты оставьте 8000/3000.
-- Healthchecks: `/health`, `/ready` (API) и healthcheck в compose следят за API/DB/Redis.
+- Volume `postgres_data` - Р±Р°Р·Р°; `shared_data` > `/data` (Telethon-СЃРµСЃСЃРёРё, РІР»РѕР¶РµРЅРёСЏ).
+- Р•СЃР»Рё 8001/3001 Р·Р°РЅСЏС‚С‹ РЅР° С…РѕСЃС‚Рµ Docker Desktop - РјРµРЅСЏР№С‚Рµ С‚РѕР»СЊРєРѕ Р»РµРІСѓСЋ С‡Р°СЃС‚СЊ РјР°РїРїРёРЅРіР° РІ `docker-compose.yml`, РІРЅСѓС‚СЂРµРЅРЅРёРµ РїРѕСЂС‚С‹ РѕСЃС‚Р°РІСЊС‚Рµ 8000/3000.
+- Healthchecks: `/health`, `/ready` (API) Рё healthcheck РІ compose СЃР»РµРґСЏС‚ Р·Р° API/DB/Redis.
 
-### Сброс БД (dev)
+### РЎР±СЂРѕСЃ Р‘Р” (dev)
 ```powershell
 docker compose down -v
 docker compose up --build --detach
 ```
 
-### Планировщик (MSK)
-- Планирование постов: 00:05 по Москве.
-- Отправка запланированных: каждые 60 секунд.
-- Время хранится в UTC, в UI показывается в Europe/Moscow.
+### РџР»Р°РЅРёСЂРѕРІС‰РёРє (MSK)
+- РџР»Р°РЅРёСЂРѕРІР°РЅРёРµ РїРѕСЃС‚РѕРІ: 00:05 РїРѕ РњРѕСЃРєРІРµ.
+- РћС‚РїСЂР°РІРєР° Р·Р°РїР»Р°РЅРёСЂРѕРІР°РЅРЅС‹С…: РєР°Р¶РґС‹Рµ 60 СЃРµРєСѓРЅРґ.
+- Р’СЂРµРјСЏ С…СЂР°РЅРёС‚СЃСЏ РІ UTC, РІ UI РїРѕРєР°Р·С‹РІР°РµС‚СЃСЏ РІ Europe/Moscow.
 
-## Подключение Telegram (кратко)
-1. Войти в админку, создать проект.
-2. На странице «Старт» нажать «Получить QR», сканировать в телефоне: **Телефон > Telegram > Настройки > Устройства > Подключить устройство (QR)**. При необходимости ввести 2FA-пароль.
-3. На странице «Каналы» нажать «Найти мои каналы», выбрать и сохранить.
-4. На странице «Старт» нажать «Опубликовать тестовый пост».
+## РџРѕРґРєР»СЋС‡РµРЅРёРµ Telegram (РєСЂР°С‚РєРѕ)
+1. Р’РѕР№С‚Рё РІ Р°РґРјРёРЅРєСѓ, СЃРѕР·РґР°С‚СЊ РїСЂРѕРµРєС‚.
+2. РќР° СЃС‚СЂР°РЅРёС†Рµ <РЎС‚Р°СЂС‚> РЅР°Р¶Р°С‚СЊ <РџРѕР»СѓС‡РёС‚СЊ QR>, СЃРєР°РЅРёСЂРѕРІР°С‚СЊ РІ С‚РµР»РµС„РѕРЅРµ: **РўРµР»РµС„РѕРЅ > Telegram > РќР°СЃС‚СЂРѕР№РєРё > РЈСЃС‚СЂРѕР№СЃС‚РІР° > РџРѕРґРєР»СЋС‡РёС‚СЊ СѓСЃС‚СЂРѕР№СЃС‚РІРѕ (QR)**. РџСЂРё РЅРµРѕР±С…РѕРґРёРјРѕСЃС‚Рё РІРІРµСЃС‚Рё 2FA-РїР°СЂРѕР»СЊ.
+3. РќР° СЃС‚СЂР°РЅРёС†Рµ <РљР°РЅР°Р»С‹> РЅР°Р¶Р°С‚СЊ <РќР°Р№С‚Рё РјРѕРё РєР°РЅР°Р»С‹>, РІС‹Р±СЂР°С‚СЊ Рё СЃРѕС…СЂР°РЅРёС‚СЊ.
+4. РќР° СЃС‚СЂР°РЅРёС†Рµ <РЎС‚Р°СЂС‚> РЅР°Р¶Р°С‚СЊ <РћРїСѓР±Р»РёРєРѕРІР°С‚СЊ С‚РµСЃС‚РѕРІС‹Р№ РїРѕСЃС‚>.
 
-## REST (для отладки)
-- Telegram: `POST /api/telegram/qr/start`, `/api/telegram/qr/wait`, `/api/telegram/qr/password`, `GET /api/telegram/status`, `DELETE /api/telegram/session` (сброс сессии Telethon в `/data/telethon`).
-- RSS/контент: `POST /api/rss/pull`, `GET /api/news/latest`, `POST /api/preview/next`, `POST /api/publish/next`.
+## REST (РґР»СЏ РѕС‚Р»Р°РґРєРё)
+- Telegram: `POST /api/telegram/qr/start`, `/api/telegram/qr/wait`, `/api/telegram/qr/password`, `GET /api/telegram/status`, `DELETE /api/telegram/session` (СЃР±СЂРѕСЃ СЃРµСЃСЃРёРё Telethon РІ `/data/telethon`).
+- RSS/РєРѕРЅС‚РµРЅС‚: `POST /api/rss/pull`, `GET /api/news/latest`, `POST /api/preview/next`, `POST /api/publish/next`.
 
-## Частые проблемы
-- QR истёк: нажмите «Получить QR» снова и пересканируйте.
-- Неверный 2FA-пароль: перепроверьте пароль Telegram, введите заново.
-- Нет TELETHON_API_ID/HASH: заполните в `.env`, перезапустите `docker compose up --build --detach`.
-- Сессия испорчена: на «Старт» нажмите «Сбросить сессию» и подключитесь заново.
+## Р§Р°СЃС‚С‹Рµ РїСЂРѕР±Р»РµРјС‹
+- QR РёСЃС‚С‘Рє: РЅР°Р¶РјРёС‚Рµ <РџРѕР»СѓС‡РёС‚СЊ QR> СЃРЅРѕРІР° Рё РїРµСЂРµСЃРєР°РЅРёСЂСѓР№С‚Рµ.
+- РќРµРІРµСЂРЅС‹Р№ 2FA-РїР°СЂРѕР»СЊ: РїРµСЂРµРїСЂРѕРІРµСЂСЊС‚Рµ РїР°СЂРѕР»СЊ Telegram, РІРІРµРґРёС‚Рµ Р·Р°РЅРѕРІРѕ.
+- РќРµС‚ TELETHON_API_ID/HASH: Р·Р°РїРѕР»РЅРёС‚Рµ РІ `.env`, РїРµСЂРµР·Р°РїСѓСЃС‚РёС‚Рµ `docker compose up --build --detach`.
+- РЎРµСЃСЃРёСЏ РёСЃРїРѕСЂС‡РµРЅР°: РЅР° <РЎС‚Р°СЂС‚> РЅР°Р¶РјРёС‚Рµ <РЎР±СЂРѕСЃРёС‚СЊ СЃРµСЃСЃРёСЋ> Рё РїРѕРґРєР»СЋС‡РёС‚РµСЃСЊ Р·Р°РЅРѕРІРѕ.
 
-## Проверки
+## РџСЂРѕРІРµСЂРєРё
 - `curl.exe http://localhost:8001/health`
 - `docker compose logs --tail=50 api`
 - `docker compose exec api uv run --extra dev pytest -q`
-- UI: http://localhost:3001 (пароль ADMIN_PASSWORD)
+- UI: http://localhost:3001 (РїР°СЂРѕР»СЊ ADMIN_PASSWORD)
