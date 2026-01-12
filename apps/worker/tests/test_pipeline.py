@@ -73,6 +73,7 @@ async def create_project_with_data() -> tuple[int, int]:
             image_mode=ImageMode.WIKIMEDIA,
             language="ru",
             tone="neutral",
+            premium_emoji_fallback="⚡",
         )
         session.add(config)
         conn = TelegramConnection(
@@ -152,6 +153,8 @@ async def test_pipeline_publishes_with_user_session(monkeypatch: pytest.MonkeyPa
         text: str,
         image_path: str | None = None,
         link_preview: bool | None = None,
+        premium_emoji_id: int | None = None,
+        premium_emoji_fallback: str | None = None,
         settings: Any | None = None,
     ) -> None:  # type: ignore[override]
         sent.extend(chat_ids)

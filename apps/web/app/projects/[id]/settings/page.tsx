@@ -54,6 +54,9 @@ export default function SettingsPage() {
       <AuthGate>
         <ProjectNav />
         <h2>Конфигурация агента</h2>
+        <div className="muted" style={{ marginBottom: 8 }}>
+          Настройте расписание и формат постов. После изменений нажмите «Сохранить».
+        </div>
         {error && <div className="badge" style={{ background: "#b91c1c" }}>{error}</div>}
         {!config && <div className="muted">Загрузка...</div>}
         {config && (
@@ -134,6 +137,38 @@ export default function SettingsPage() {
                   <option value="premium">Premium</option>
                 </select>
               </div>
+              <div style={{ flex: 1 }}>
+                <div className="label">Брендовый премиум-эмодзи</div>
+                <input
+                  className="input"
+                  placeholder="tg://emoji?id=123... или число"
+                  value={config.premium_emoji_id ?? ""}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    const match = raw.match(/(\d+)/);
+                    const id = match ? Number(match[1]) : null;
+                    onChange("premium_emoji_id", id);
+                  }}
+                />
+                <div className="muted" style={{ fontSize: 12 }}>
+                  Вставьте ссылку tg://emoji или числовой ID. Если оставить пустым, будет использован запасной символ.
+                </div>
+              </div>
+              <div style={{ flex: 1 }}>
+                <div className="label">Запасной символ эмодзи</div>
+                <input
+                  className="input"
+                  maxLength={4}
+                  placeholder="Например, ⚽"
+                  value={config.premium_emoji_fallback ?? ""}
+                  onChange={(e) => onChange("premium_emoji_fallback", e.target.value)}
+                />
+                <div className="muted" style={{ fontSize: 12 }}>
+                  Отобразится в тексте, если премиум-эмодзи не доступен.
+                </div>
+              </div>
+            </div>
+            <div className="row">
               <div style={{ flex: 1 }}>
                 <div className="label">Картинки</div>
                 <select

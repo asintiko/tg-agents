@@ -5,6 +5,7 @@
 __pycache__/
 **/__pycache__/
 *.pyc
+**/*.pyc
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
@@ -26,8 +27,15 @@ data/
 *.db
 *.sqlite
 *.sqlite3
+*.sql
+*.dump
+*.backup
 *.session
+**/*.session
 *.log
+**/*.log
+postgres_data/
+pgdata/
 
 uv.lock
 *.swp

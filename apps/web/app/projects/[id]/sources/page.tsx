@@ -55,13 +55,37 @@ export default function SourcesPage() {
     await load();
   };
 
+  const pullNow = async () => {
+    if (!projectId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await SourcesApi.pullProject(projectId);
+      await load();
+      alert(`Загружено записей: ${res.inserted}`);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <PageShell>
       <AuthGate>
         <ProjectNav />
         <div className="grid" style={{ gap: 12 }}>
           <h2>Источники новостей</h2>
+          <div className="muted">
+            RSS — бесплатная лента новостей (XML), платные API не используются. Воркер проверяет ленты каждые 5 минут. Кнопка ниже запускает проверку сразу.
+          </div>
           {error && <div className="badge" style={{ background: "#b91c1c" }}>{error}</div>}
+          <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+            <button className="btn" onClick={pullNow} disabled={loading}>
+              Проверить RSS сейчас
+            </button>
+            <div className="muted">После проверки новые новости появятся на странице «Старт».</div>
+          </div>
           <div className="card">
             <div className="row">
               <input

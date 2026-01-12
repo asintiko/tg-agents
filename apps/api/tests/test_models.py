@@ -90,6 +90,8 @@ async def test_agent_config_upsert() -> None:
                 "tone": "neutral",
                 "signature_html": "<b>sig</b>",
                 "emoji_mode": "basic",
+                "premium_emoji_id": None,
+                "premium_emoji_fallback": "⚡",
                 "include_source_link": True,
                 "image_mode": "wikimedia",
             },
@@ -107,6 +109,8 @@ async def test_agent_config_upsert() -> None:
                 "tone": "warm",
                 "signature_html": None,
                 "emoji_mode": "premium",
+                "premium_emoji_id": 1234567890,
+                "premium_emoji_fallback": "🔥",
                 "include_source_link": False,
                 "image_mode": "og_image",
             },
@@ -115,3 +119,5 @@ async def test_agent_config_upsert() -> None:
         data = put_resp2.json()
         assert data["posts_per_day"] == 5
         assert data["tone"] == "warm"
+        assert data["premium_emoji_id"] == 1234567890
+        assert data["premium_emoji_fallback"] == "🔥"

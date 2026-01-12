@@ -201,20 +201,29 @@ async def _ensure_default_project(session: AsyncSession) -> Project:
     return project
 
 
+def _config_template(project_id: int) -> AgentConfig:
+    return AgentConfig(
+        project_id=project_id,
+        posts_per_day=8,
+        window_start="09:00",
+        window_end="23:59",
+        min_interval_minutes=60,
+        language="ru",
+        tone="neutral",
+        signature_html=None,
+        emoji_mode=EmojiMode.BASIC,
+        premium_emoji_id=None,
+        premium_emoji_fallback="⚡",
+        include_source_link=True,
+        image_mode=ImageMode.OG_IMAGE,
+    )
+
+
 async def _ensure_default_config(session: AsyncSession, project_id: int) -> AgentConfig:
     cfg = await session.scalar(select(AgentConfig).where(AgentConfig.project_id == project_id))
     if cfg:
         return cfg
-    cfg = AgentConfig(
-        project_id=project_id,
-        posts_per_day=3,
-        window_start="09:00",
-        window_end="23:00",
-        min_interval_minutes=30,
-        language="ru",
-        tone="нейтральный",
-        include_source_link=True,
-    )
+    cfg = _config_template(project_id)
     session.add(cfg)
     await session.commit()
     await session.refresh(cfg)
@@ -376,11 +385,13 @@ async def api_publish_next(_: AdminDep) -> dict[str, Any]:
             message_ids = await send_user_message(
                 project.id,
                 [ch.tg_chat_id for ch in channels],
-                text,
-                image_path=image_path,
-                link_preview=link_preview if image_path is None else False,
-                settings=settings,
-            )
+            text,
+            image_path=image_path,
+            link_preview=link_preview if image_path is None else False,
+            brand_emoji_id=config.brand_emoji_id,
+            brand_emoji_fallback=config.brand_emoji_fallback or "⚽",
+            settings=settings,
+        )
         except Exception as exc:  # noqa: BLE001
             logger.exception("Failed to publish next news: %s", exc)
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Не удалось отправить пост") from exc
@@ -399,6 +410,112 @@ async def api_publish_next(_: AdminDep) -> dict[str, Any]:
         return {"ok": True, "tg_message_ids": message_ids, "news_id": news.id}
 
 
+@app.post("/projects/{project_id}/preview/next")
+async def project_preview_next(
+    project_id: int,
+    session: SessionDep,
+    _: AdminDep,
+) -> dict[str, Any]:
+    project = await session.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Проект не найден")
+    config = await _ensure_default_config(session, project.id)
+    news = await pick_next_news_item(session, project.id)
+    if not news:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Нет новостей")
+    generator = GeminiGenerator()
+    generated = await generator.generate(news, news.source.name if news.source else "", config)
+    return {
+        "news_id": news.id,
+        "headline": generated.headline,
+        "body_html": generated.body_html,
+        "image_query": generated.image_query,
+        "should_post": generated.should_post,
+        "reason_if_skip": generated.reason_if_skip,
+    }
+
+
+@app.post("/projects/{project_id}/publish/next")
+async def project_publish_next(
+    project_id: int,
+    session: SessionDep,
+    _: AdminDep,
+) -> dict[str, Any]:
+    project = await session.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Проект не найден")
+    config = await _ensure_default_config(session, project.id)
+    tele = await telethon_status(settings)
+    if tele.get("status") != "connected":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Telegram не подключён")
+    channels_result = await session.execute(
+        select(TelegramChannel)
+        .where(
+            TelegramChannel.project_id == project.id,
+            TelegramChannel.enabled.is_(True),
+        )
+        .order_by(TelegramChannel.id)
+    )
+    channels = list(channels_result.scalars().all())
+    if not channels:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Выберите хотя бы один канал"
+        )
+    news = await pick_next_news_item(session, project.id)
+    if not news:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Нет новостей для публикации")
+    generator = GeminiGenerator()
+    generated = await generator.generate(news, news.source.name if news.source else "", config)
+    if not generated.should_post:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=generated.reason_if_skip or "Контент не подходит для публикации",
+        )
+    text = generated.body_html
+    link_preview = config.image_mode == ImageMode.LINK_PREVIEW
+    image_path: str | None = None
+    if config.image_mode != ImageMode.LINK_PREVIEW:
+        service = ImageService(get_sessionmaker(), settings)
+        try:
+            if config.image_mode == ImageMode.OG_IMAGE:
+                image = await service.find_image(news.url, mode="og_image")
+                if not image and generated.image_query:
+                    image = await service.find_image(generated.image_query, mode="wikimedia")
+            else:
+                image = await service.find_image(generated.image_query, mode="wikimedia")
+            if image:
+                image_path = image.path
+        finally:
+            await service.close()
+    try:
+        message_ids = await send_user_message(
+            project.id,
+            [ch.tg_chat_id for ch in channels],
+            text,
+            image_path=image_path,
+            link_preview=link_preview if image_path is None else False,
+            brand_emoji_id=config.brand_emoji_id,
+            brand_emoji_fallback=config.brand_emoji_fallback or "⚽",
+            settings=settings,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Failed to publish next news for project %s: %s", project.id, exc)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Не удалось отправить пост") from exc
+
+    post = Post(
+        project_id=project.id,
+        news_item_id=news.id,
+        status=PostStatus.PUBLISHED,
+        planned_at=to_utc(msk_now()),
+        published_at=to_utc(msk_now()),
+        tg_message_id=",".join(message_ids) if message_ids else None,
+        payload_json=generated.model_dump(mode="json"),
+    )
+    session.add(post)
+    await session.commit()
+    return {"ok": True, "tg_message_ids": message_ids, "news_id": news.id}
+
+
 @app.post("/projects", response_model=ProjectOut, status_code=status.HTTP_201_CREATED)
 async def create_project(
     payload: ProjectCreate,
@@ -409,23 +526,9 @@ async def create_project(
     session.add(project)
     await session.flush()
 
-    # Автоконфигурация агента для удобного старта в UI.
-    session.add(
-        AgentConfig(
-            project_id=project.id,
-            posts_per_day=8,
-            window_start="09:00",
-            window_end="23:59",
-            min_interval_minutes=60,
-            language="ru",
-            tone="neutral",
-            emoji_mode=EmojiMode.BASIC,
-            include_source_link=True,
-            image_mode=ImageMode.OG_IMAGE,
-        )
-    )
+    # Автоконфигурация агента и RSS для удобного старта.
+    session.add(_config_template(project.id))
 
-    # Автодобавление дефолтных RSS-источников под футбол.
     if project.niche == Niche.FOOTBALL:
         existing_feeds = await session.scalar(
             select(func.count()).where(FeedSource.project_id == project.id)
@@ -480,12 +583,10 @@ async def get_agent_config(
     session: SessionDep,
     _: AdminDep,
 ) -> AgentConfigOut:
-    result = await session.execute(select(AgentConfig).where(AgentConfig.project_id == project_id))
-    config = result.scalar_one_or_none()
-    if not config:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Конфигурация агента не найдена"
-        )
+    project = await session.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Проект не найден")
+    config = await _ensure_default_config(session, project_id)
     return config
 
 
@@ -705,6 +806,8 @@ async def telegram_status(
         last_connected_at=tele.get("last_connected_at")
         if status_value == ConnectionStatus.CONNECTED
         else (conn.last_connected_at if conn else None),
+        me=tele.get("me"),
+        me_photo_b64=tele.get("me_photo_b64"),
     )
 
 
@@ -756,6 +859,21 @@ async def update_channel(
     await session.commit()
     await session.refresh(channel)
     return channel
+
+
+@app.delete("/channels/{channel_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_channel(
+    channel_id: int,
+    session: SessionDep,
+    _: AdminDep,
+) -> None:
+    result = await session.execute(select(TelegramChannel).where(TelegramChannel.id == channel_id))
+    channel = result.scalar_one_or_none()
+    if not channel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Канал не найден")
+    await session.delete(channel)
+    await session.commit()
+    return None
 
 
 async def _import_channels_for_project(
@@ -875,6 +993,8 @@ async def discover_project_channels(
             tg_chat_id=ch["tg_chat_id"],
             title=ch["title"],
             username=ch.get("username"),
+            can_post=ch.get("can_post"),
+            role=ch.get("role"),
         )
         for ch in channels
     ]
@@ -885,6 +1005,19 @@ async def discover_project_channels(
     response_model=list[TelegramChannelsListOut],
 )
 async def import_project_channels(
+    project_id: int,
+    payload: TelegramChannelsSaveRequest,
+    session: SessionDep,
+    _: AdminDep,
+) -> list[TelegramChannelsListOut]:
+    project = await session.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Проект не найден")
+    return await _import_channels_for_project(session, project_id, payload)
+
+
+@app.post("/projects/{project_id}/channels/import", response_model=list[TelegramChannelsListOut])
+async def import_project_channels_new(
     project_id: int,
     payload: TelegramChannelsSaveRequest,
     session: SessionDep,
@@ -1027,10 +1160,18 @@ async def send_test_message(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Нет настроенных каналов"
         )
+    config = await session.scalar(
+        select(AgentConfig).where(AgentConfig.project_id == project_id)
+    )
     try:
         chat_ids = [ch.tg_chat_id for ch in channels]
         await send_user_message(
-            project_id, chat_ids, payload.text, image_path=payload.image_path
+            project_id,
+            chat_ids,
+            payload.text,
+            image_path=payload.image_path,
+            premium_emoji_id=config.premium_emoji_id if config else None,
+            premium_emoji_fallback=(config.premium_emoji_fallback if config else None) or "⚡",
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -1063,6 +1204,7 @@ async def api_test_post(_: AdminDep, session: SessionDep) -> TestPostResponse:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Выберите хотя бы один канал"
         )
+    config = await _ensure_default_config(session, project.id)
     text = (
         "✅ Тестовая публикация\n"
         f"Время (МСК): {msk_now().strftime('%Y-%m-%d %H:%M:%S')}\n"
@@ -1070,7 +1212,13 @@ async def api_test_post(_: AdminDep, session: SessionDep) -> TestPostResponse:
     )
     try:
         message_ids = await send_user_message(
-            project.id, [channels[0].tg_chat_id], text, image_path=None, settings=settings
+            project.id,
+            [channels[0].tg_chat_id],
+            text,
+            image_path=None,
+            premium_emoji_id=config.premium_emoji_id,
+            premium_emoji_fallback=config.premium_emoji_fallback or "⚡",
+            settings=settings,
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

@@ -116,6 +116,8 @@ class PostPipeline:
                     text,
                     image_path=image_path,
                     link_preview=link_preview,
+                    premium_emoji_id=config.premium_emoji_id,
+                    premium_emoji_fallback=config.premium_emoji_fallback or "⚡",
                     settings=self.settings,
                 )
                 post.tg_message_id = "sent-user"

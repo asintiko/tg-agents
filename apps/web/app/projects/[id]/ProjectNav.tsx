@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams, usePathname } from "next/navigation";
 
 const tabs = [
+  { slug: "", label: "Старт" },
   { slug: "settings", label: "Настройки" },
   { slug: "sources", label: "Источники (RSS)" },
   { slug: "telegram", label: "Telegram" },
@@ -19,8 +20,8 @@ export function ProjectNav() {
   return (
     <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
       {tabs.map((tab) => {
-        const href = `/projects/${projectId}/${tab.slug}`;
-        const active = pathname?.endsWith(tab.slug);
+        const href = tab.slug ? `/projects/${projectId}/${tab.slug}` : `/projects/${projectId}`;
+        const active = tab.slug ? pathname?.endsWith(tab.slug) : pathname === `/projects/${projectId}`;
         return (
           <Link
             key={tab.slug}

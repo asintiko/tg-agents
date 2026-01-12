@@ -228,9 +228,13 @@ export default function TelegramPage() {
   const lastConnected = lastConnectedRaw
     ? new Date(lastConnectedRaw).toLocaleString("ru-RU", { timeZone: "Europe/Moscow" })
     : "-";
-  const me = globalStatus?.me;
-  const accountLabel = me
-    ? [me.username, me.phone, me.id ? `id ${me.id}` : null].filter(Boolean).join(" / ")
+  const me = globalStatus?.me ?? status?.me;
+  const photo = globalStatus?.me_photo_b64 ?? status?.me_photo_b64 ?? null;
+  const displayName = me
+    ? [me.first_name, me.last_name].filter(Boolean).join(" ").trim() ||
+      me.username ||
+      me.phone ||
+      "—"
     : "—";
   const connectionLabel = globalStatus?.status ?? status?.status ?? "-";
 
@@ -240,6 +244,9 @@ export default function TelegramPage() {
         <ProjectNav />
         <div className="grid" style={{ gap: 16 }}>
           <h2>Подключение Telegram (Telethon)</h2>
+          <div className="muted">
+            Подключите пользовательский аккаунт по QR или номеру телефона, чтобы публикация работала. После подключения обновите статус.
+          </div>
           {error && <div className="badge" style={{ background: "#b91c1c" }}>{error}</div>}
           {info && <div className="badge" style={{ background: "#065f46" }}>{info}</div>}
 
@@ -248,7 +255,32 @@ export default function TelegramPage() {
             <div style={{ fontWeight: 700, fontSize: 18 }}>
               {connectionLabel} / каналов: {status?.channels ?? 0}
             </div>
-            <div className="muted">Аккаунт: {accountLabel}</div>
+            <div className="row" style={{ gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+              {photo && (
+                <img
+                  src={photo}
+                  alt="avatar"
+                  style={{ width: 72, height: 72, borderRadius: "50%", objectFit: "cover", border: "1px solid var(--border)" }}
+                />
+              )}
+              <div className="grid" style={{ gap: 4 }}>
+                <div style={{ fontWeight: 700 }}>{displayName}</div>
+                {me?.username && (
+                  <a
+                    className="muted"
+                    href={`https://t.me/${me.username}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ textDecoration: "underline" }}
+                  >
+                    @{me.username}
+                  </a>
+                )}
+                {me?.phone && <div className="muted">Телефон: {me.phone}</div>}
+                {me?.id && <div className="muted">ID: {me.id}</div>}
+                {!me && <div className="muted">Не подключено</div>}
+              </div>
+            </div>
             <div className="muted">Последнее подключение: {lastConnected}</div>
             <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
               <button className="btn secondary" onClick={loadStatus} disabled={loading}>

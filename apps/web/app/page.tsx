@@ -79,10 +79,10 @@ export default function ProjectsPage() {
               <tbody>
                 {projects.map((p) => (
                   <tr key={p.id}>
-                    <td>{p.id}</td>
-                    <td>
-                      <Link href={`/projects/${p.id}/settings`}>{p.name}</Link>
-                    </td>
+                  <td>{p.id}</td>
+                  <td>
+                      <Link href={`/projects/${p.id}`}>{p.name}</Link>
+                  </td>
                     <td>{p.niche}</td>
                     <td>
                       {new Date(p.created_at).toLocaleString("ru-RU", {

@@ -37,6 +37,8 @@ class AgentConfigUpdate(BaseModel):
     tone: str = Field(default="neutral")
     signature_html: str | None = None
     emoji_mode: EmojiMode = EmojiMode.OFF
+    premium_emoji_id: int | None = None
+    premium_emoji_fallback: str | None = "⚡"
     include_source_link: bool = True
     image_mode: ImageMode = ImageMode.WIKIMEDIA
 
@@ -126,18 +128,23 @@ class TelegramStatusOut(BaseModel):
     status: ConnectionStatus | None
     channels: int
     last_connected_at: datetime | None
+    me: TelegramMe | None = None
+    me_photo_b64: str | None = None
 
 
 class TelegramMe(BaseModel):
     id: int | None
     username: str | None
     phone: str | None
+    first_name: str | None = None
+    last_name: str | None = None
 
 
 class TelegramAuthStatus(BaseModel):
     status: str
     last_connected_at: datetime | None = None
     me: TelegramMe | None = None
+    me_photo_b64: str | None = None
 
 
 class TelegramQrStartResponse(TelegramAuthStatus):
@@ -178,6 +185,8 @@ class TelegramDiscoveredChannel(BaseModel):
     tg_chat_id: str
     title: str
     username: str | None = None
+    can_post: bool | None = None
+    role: str | None = None
 
 
 class TelegramChannelsSaveRequest(BaseModel):

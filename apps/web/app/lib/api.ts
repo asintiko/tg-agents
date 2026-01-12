@@ -3,8 +3,8 @@ export type TokenResponse = { access_token: string; token_type: string };
 
 export type Project = { id: number; name: string; niche: string; created_at: string };
 export type AgentConfig = {
-    project_id: number;
-    posts_per_day: number;
+  project_id: number;
+  posts_per_day: number;
   window_start: string;
   window_end: string;
   min_interval_minutes: number;
@@ -12,6 +12,8 @@ export type AgentConfig = {
   tone: string;
   signature_html: string | null;
   emoji_mode: string;
+  premium_emoji_id: number | null;
+  premium_emoji_fallback: string | null;
   include_source_link: boolean;
   image_mode: string;
 };
@@ -24,15 +26,25 @@ export type FeedSource = {
   weight: number;
   created_at: string;
 };
+export type TelegramUser = {
+  id: number | null;
+  username: string | null;
+  phone: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
+};
 export type TelegramStatus = {
-    status: string | null;
-    channels: number;
-    last_connected_at: string | null;
+  status: string | null;
+  channels: number;
+  last_connected_at: string | null;
+  me?: TelegramUser | null;
+  me_photo_b64?: string | null;
 };
 export type TelegramAuthInfo = {
   status: string;
   last_connected_at?: string | null;
-  me?: { id: number | null; username: string | null; phone: string | null } | null;
+  me?: TelegramUser | null;
+  me_photo_b64?: string | null;
 };
 export type TelegramChannel = {
     id: number;
@@ -46,6 +58,8 @@ export type DiscoveredChannel = {
   tg_chat_id: string;
   title: string;
   username: string | null;
+  can_post?: boolean | null;
+  role?: string | null;
 };
 export type NewsItem = {
   id: number;
@@ -85,12 +99,39 @@ function buildHeaders(init?: RequestInit): Record<string, string> {
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  try {
     const res = await fetch(`${API_BASE}${path}`, { ...init, headers: buildHeaders(init) });
+    const text = await res.text();
     if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || res.statusText);
+      let message = res.statusText || "Ошибка запроса";
+      if (text) {
+        try {
+          const data = JSON.parse(text);
+          if (typeof data === "string") {
+            message = data;
+          } else if (typeof data?.detail === "string") {
+            message = data.detail;
+          } else if (typeof data?.message === "string") {
+            message = data.message;
+          } else if (Array.isArray(data?.errors)) {
+            message = data.errors.join("; ");
+          } else {
+            message = text;
+          }
+        } catch {
+          message = text;
+        }
+      }
+      throw new Error(message || "Ошибка запроса");
     }
-    return (await res.json()) as T;
+    if (!text) {
+      return undefined as T;
+    }
+    return JSON.parse(text) as T;
+  } catch (e) {
+    const msg = (e as Error).message || "Сервис недоступен";
+    throw new Error(msg);
+  }
 }
 
 export async function login(password: string) {
@@ -131,6 +172,8 @@ export const SourcesApi = {
     }),
     remove: (feedId: number) =>
         apiFetch<void>(`/feed-sources/${feedId}`, { method: "DELETE" }),
+    pullProject: (projectId: number) =>
+      apiFetch<{ inserted: number }>(`/projects/${projectId}/feeds/pull`, { method: "POST" }),
 };
 
 export const TelegramApi = {
@@ -199,7 +242,7 @@ export const ChannelsApi = {
   discoverForProject: (projectId: number) =>
     apiFetch<DiscoveredChannel[]>(`/projects/${projectId}/telegram/user/channels/discover`),
   importForProject: (projectId: number, channels: DiscoveredChannel[], replace = true) =>
-    apiFetch<TelegramChannel[]>(`/projects/${projectId}/telegram/channels/import`, {
+    apiFetch<TelegramChannel[]>(`/projects/${projectId}/channels/import`, {
       method: "POST",
       body: JSON.stringify({ channels, replace }),
     }),
@@ -209,6 +252,8 @@ export const ChannelsApi = {
       method: "PATCH",
       body: JSON.stringify({ enabled }),
     }),
+  remove: (channelId: number) =>
+    apiFetch<void>(`/channels/${channelId}`, { method: "DELETE" }),
 };
 
 export const TestApi = {
@@ -219,6 +264,8 @@ export const NewsApi = {
   list: (projectId: number) => apiFetch<NewsItem[]>(`/projects/${projectId}/news/latest`),
   latestGlobal: () => apiFetch<NewsItem[]>(`/api/news/latest`),
   pull: () => apiFetch<{ ok: number }>(`/api/rss/pull`, { method: "POST" }),
+  pullProject: (projectId: number) =>
+    apiFetch<{ inserted: number }>(`/projects/${projectId}/feeds/pull`, { method: "POST" }),
 };
 
 export const PlanApi = {
@@ -239,9 +286,16 @@ export const PostsApi = {
 
 export const PreviewApi = {
   next: () => apiFetch<PreviewResponse>("/api/preview/next", { method: "POST" }),
+  nextForProject: (projectId: number) =>
+    apiFetch<PreviewResponse>(`/projects/${projectId}/preview/next`, { method: "POST" }),
   publish: () =>
     apiFetch<{ ok: boolean; news_id: number; tg_message_ids?: string[] }>(
       "/api/publish/next",
+      { method: "POST" },
+    ),
+  publishForProject: (projectId: number) =>
+    apiFetch<{ ok: boolean; news_id: number; tg_message_ids?: string[] }>(
+      `/projects/${projectId}/publish/next`,
       { method: "POST" },
     ),
 };

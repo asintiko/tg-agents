@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 from dataclasses import dataclass
+import re
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +16,8 @@ from telethon.errors import (
     PasswordHashInvalidError,
     SessionPasswordNeededError,
 )
+from telethon.extensions import html as telethon_html
+from telethon.tl.types import MessageEntityCustomEmoji, TypeMessageEntity
 
 from apps.api.config import Settings, get_settings
 from apps.api.time_utils import msk_now
@@ -72,14 +76,27 @@ def _serialize_me(me: Any) -> dict[str, Any]:
         "id": getattr(me, "id", None),
         "username": getattr(me, "username", None),
         "phone": getattr(me, "phone", None),
+        "first_name": getattr(me, "first_name", None),
+        "last_name": getattr(me, "last_name", None),
     }
 
 
-def _write_status(settings: Settings, status: str, me: Any | None = None) -> None:
+async def _download_photo_b64(client: TelegramClient, me: Any) -> str | None:
+    try:
+        file = await client.download_profile_photo(me, bytes)
+    except Exception:
+        return None
+    if not file:
+        return None
+    return f"data:image/jpeg;base64,{base64.b64encode(file).decode('utf-8')}"
+
+
+def _write_status(settings: Settings, status: str, me: Any | None = None, photo_b64: str | None = None) -> None:
     payload = {
         "status": status,
         "last_connected_at": None,
         "me": None,
+        "me_photo_b64": photo_b64,
     }
     if status == "connected" and me is not None:
         payload["last_connected_at"] = msk_now().isoformat()
@@ -118,9 +135,10 @@ async def start_qr_login(settings: Settings | None = None) -> dict[str, Any]:
     await client.connect()
     if await client.is_user_authorized():
         me = await client.get_me()
+        photo_b64 = await _download_photo_b64(client, me)
         await client.disconnect()
-        _write_status(settings, "connected", me)
-        return {"status": "connected", "me": _serialize_me(me)}
+        _write_status(settings, "connected", me, photo_b64)
+        return {"status": "connected", "me": _serialize_me(me), "me_photo_b64": photo_b64}
 
     qr_login = await client.qr_login()
     _pending = PendingLogin(client=client, qr_login=qr_login, session_path=_session_path(settings))
@@ -136,9 +154,10 @@ async def wait_for_qr(settings: Settings | None = None) -> dict[str, Any]:
     try:
         await _pending.qr_login.wait()
         me = await _pending.client.get_me()
+        photo_b64 = await _download_photo_b64(_pending.client, me)
         await _pending.client.disconnect()
-        _write_status(settings, "connected", me)
-        return {"status": "connected", "me": _serialize_me(me)}
+        _write_status(settings, "connected", me, photo_b64)
+        return {"status": "connected", "me": _serialize_me(me), "me_photo_b64": photo_b64}
     except SessionPasswordNeededError:
         _pending.awaiting_password = True
         _write_status(settings, "password_required")
@@ -156,7 +175,7 @@ async def start_phone_login(phone: str, settings: Settings | None = None) -> dic
     settings = settings or get_settings()
     phone = phone.strip()
     if not phone:
-        raise ValueError("Phone number is required for login")
+        raise ValueError("Укажите номер телефона в международном формате")
     _ensure_creds(settings)
     global _pending
     global _pending_phone
@@ -210,8 +229,9 @@ async def provide_phone_code(code: str, settings: Settings | None = None) -> dic
             phone_code_hash=_pending_phone.code_hash or None,
         )
         me = await _pending_phone.client.get_me()
-        _write_status(settings, "connected", me)
-        return {"status": "connected", "me": _serialize_me(me)}
+        photo_b64 = await _download_photo_b64(_pending_phone.client, me)
+        _write_status(settings, "connected", me, photo_b64)
+        return {"status": "connected", "me": _serialize_me(me), "me_photo_b64": photo_b64}
     except SessionPasswordNeededError:
         _pending_phone.awaiting_password = True
         _write_status(settings, "password_required")
@@ -249,15 +269,17 @@ async def provide_password(password: str, settings: Settings | None = None) -> d
                 await _pending.client.connect()
             await _pending.client.sign_in(password=password)
             me = await _pending.client.get_me()
-            _write_status(settings, "connected", me)
-            return {"status": "connected", "me": _serialize_me(me)}
+            photo_b64 = await _download_photo_b64(_pending.client, me)
+            _write_status(settings, "connected", me, photo_b64)
+            return {"status": "connected", "me": _serialize_me(me), "me_photo_b64": photo_b64}
         if _pending_phone and _pending_phone.awaiting_password:
             if not _pending_phone.client.is_connected():
                 await _pending_phone.client.connect()
             await _pending_phone.client.sign_in(password=password)
             me = await _pending_phone.client.get_me()
-            _write_status(settings, "connected", me)
-            return {"status": "connected", "me": _serialize_me(me)}
+            photo_b64 = await _download_photo_b64(_pending_phone.client, me)
+            _write_status(settings, "connected", me, photo_b64)
+            return {"status": "connected", "me": _serialize_me(me), "me_photo_b64": photo_b64}
         raise ValueError("Текущая сессия не ждёт пароль, перезапустите вход")
     except PasswordHashInvalidError as exc:
         raise ValueError("Неверный пароль 2FA") from exc
@@ -291,32 +313,91 @@ def parse_entity(chat_id: str) -> int | str:
     return chat_id
 
 
+def parse_custom_emoji_id(raw: str | None) -> int | None:
+    """Извлекает numeric ID из tg://emoji?id=... или строки с числом."""
+    if not raw:
+        return None
+    match = re.search(r"(?:id=)?(\d+)", raw)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def _build_message_with_premium(
+    html_text: str,
+    premium_emoji_id: int | None,
+    fallback_char: str | None,
+) -> tuple[str, list[TypeMessageEntity]]:
+    text, entities = telethon_html.parse(html_text or "")
+    prefix = (fallback_char or "").strip()
+    custom_entities: list[TypeMessageEntity] = []
+    if premium_emoji_id is not None:
+        prefix = prefix or "⚡"
+        try:
+            custom_entities.append(
+                MessageEntityCustomEmoji(offset=0, length=len(prefix), document_id=premium_emoji_id)
+            )
+        except Exception:
+            custom_entities = []
+    if prefix:
+        spacer = " " if text else ""
+        text = f"{prefix}{spacer}{text}" if text else prefix
+        shift = len(prefix) + (1 if spacer else 0)
+        for ent in entities:
+            ent.offset += shift
+    if custom_entities:
+        entities = custom_entities + list(entities)
+    return text, list(entities)
+
+
 async def send_user_message(
     project_id: int,
     chat_ids: list[str],
     text: str,
     image_path: str | None = None,
     link_preview: bool | None = None,
+    premium_emoji_id: int | str | None = None,
+    premium_emoji_fallback: str | None = None,
     settings: Settings | None = None,
 ) -> list[str]:
     settings = settings or get_settings()
     client = _build_client(settings)
     await client.connect()
     try:
+        emoji_id = parse_custom_emoji_id(str(premium_emoji_id) if premium_emoji_id is not None else None)
+        message_text, entities = _build_message_with_premium(
+            text,
+            emoji_id,
+            premium_emoji_fallback or ("⚡" if emoji_id else ""),
+        )
         tasks: list[asyncio.Future[Any]] = []
         for chat_id in chat_ids:
             entity = parse_entity(chat_id)
             if image_path:
                 tasks.append(
                     asyncio.create_task(
-                        client.send_file(entity, image_path, caption=text, parse_mode="html")
+                        client.send_file(
+                            entity,
+                            image_path,
+                            caption=message_text,
+                            parse_mode=None,
+                            caption_entities=entities,
+                        )
                     )
                 )
             else:
-                kwargs: dict[str, Any] = {"parse_mode": "html"}
+                kwargs: dict[str, Any] = {
+                    "parse_mode": None,
+                    "formatting_entities": entities,
+                }
                 if link_preview is not None:
                     kwargs["link_preview"] = link_preview
-                tasks.append(asyncio.create_task(client.send_message(entity, text, **kwargs)))
+                tasks.append(
+                    asyncio.create_task(client.send_message(entity, message_text, **kwargs))
+                )
         results = await asyncio.gather(*tasks)
         ids: list[str] = []
         for res in results:
@@ -344,13 +425,16 @@ async def telegram_status(settings: Settings | None = None) -> dict[str, Any]:
                     "status": "disconnected",
                     "last_connected_at": status.get("last_connected_at"),
                     "me": None,
+                    "me_photo_b64": None,
                 }
             me = await client.get_me()
-            _write_status(settings, "connected", me)
+            photo_b64 = await _download_photo_b64(client, me)
+            _write_status(settings, "connected", me, photo_b64)
             return {
                 "status": "connected",
                 "last_connected_at": status.get("last_connected_at"),
                 "me": _serialize_me(me),
+                "me_photo_b64": photo_b64,
             }
         except AuthKeyUnregisteredError:
             _write_status(settings, "disconnected")
@@ -358,6 +442,7 @@ async def telegram_status(settings: Settings | None = None) -> dict[str, Any]:
                 "status": "disconnected",
                 "last_connected_at": status.get("last_connected_at"),
                 "me": None,
+                "me_photo_b64": None,
             }
         finally:
             await client.disconnect()
@@ -407,13 +492,14 @@ async def list_user_channels(settings: Settings | None = None) -> list[dict[str,
                 can_post = can_post or bool(getattr(rights, "post_messages", False)) or bool(
                     getattr(rights, "edit_messages", False)
                 )
-            if not can_post:
-                continue
+            role = "creator" if getattr(entity, "creator", False) else ("admin" if rights else "member")
             channels.append(
                 {
                     "tg_chat_id": str(dialog.id),
                     "title": dialog.name,
                     "username": getattr(entity, "username", None),
+                    "can_post": can_post,
+                    "role": role,
                 }
             )
         return channels

@@ -35,7 +35,13 @@ class ImageService:
     ) -> None:
         self.session_maker = session_maker
         self.settings = settings or get_settings()
-        self.http = http_client or httpx.AsyncClient(timeout=10.0)
+        self.headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+            )
+        }
+        self.http = http_client or httpx.AsyncClient(timeout=10.0, headers=self.headers)
 
     async def close(self) -> None:
         await self.http.aclose()
@@ -115,7 +121,7 @@ class ImageService:
         return ImageResult(path=image_path, source=page.get("title"))
 
     async def _download_image(self, image_url: str, query_hash: str) -> str:
-        response = await self.http.get(image_url)
+        response = await self.http.get(image_url, headers=self.headers)
         response.raise_for_status()
         suffix = Path(urlparse(image_url).path).suffix or ".jpg"
         images_dir = Path(self.settings.app_data_dir) / "images"
@@ -126,7 +132,7 @@ class ImageService:
 
     async def _fetch_og_image(self, page_url: str, query_hash: str) -> ImageResult | None:
         try:
-            resp = await self.http.get(page_url, follow_redirects=True)
+            resp = await self.http.get(page_url, follow_redirects=True, headers=self.headers)
             resp.raise_for_status()
         except Exception:
             return None

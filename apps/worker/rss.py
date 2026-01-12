@@ -50,6 +50,16 @@ class NormalizedEntry:
 class RSSCollector:
     default_feeds = [
         ("BBC Football", "https://feeds.bbci.co.uk/sport/football/rss.xml"),
+        ("Sky Sports Football", "https://www.skysports.com/rss/12040"),
+        ("ESPN Soccer", "https://www.espn.com/espn/rss/soccer/news"),
+        ("UEFA News", "https://www.uefa.com/rssfeed/uefanews/rss.xml"),
+        ("FIFA News", "https://www.fifa.com/rss-feeds/news"),
+        ("Guardian Football", "https://www.theguardian.com/football/rss"),
+        ("FourFourTwo", "https://www.fourfourtwo.com/feeds/all"),
+        ("Bundesliga", "https://www.bundesliga.com/en/news.rss"),
+        ("Serie A", "https://www.legaseriea.it/rss/atom"),
+        ("La Liga", "https://www.laliga.com/rss/laliga-santander"),
+        ("MLS Soccer", "https://www.mlssoccer.com/feeds/rss"),
         ("Transfermarkt News", "https://www.transfermarkt.com/rss/news"),
     ]
 
