@@ -92,7 +92,8 @@ class PostPipeline:
             return
 
         text = generated.body_html
-        image_path = await self._maybe_find_image(config, generated.image_query)
+        image_path = await self._maybe_find_image(config, generated.image_query, news.url if news else None)
+        link_preview = config.image_mode == ImageMode.LINK_PREVIEW and image_path is None
 
         connection = await self._get_connection(session, post.project_id)
         channels = await self._get_channels(session, post.project_id)
@@ -114,6 +115,7 @@ class PostPipeline:
                     chat_ids,
                     text,
                     image_path=image_path,
+                    link_preview=link_preview,
                     settings=self.settings,
                 )
                 post.tg_message_id = "sent-user"
@@ -145,15 +147,18 @@ class PostPipeline:
             post.news_item_id = news.id
         return news
 
-    async def _maybe_find_image(self, config: AgentConfig, query: str) -> str | None:
+    async def _maybe_find_image(
+        self, config: AgentConfig, query: str, news_url: str | None
+    ) -> str | None:
         if config.image_mode == ImageMode.LINK_PREVIEW:
             return None
-        mode: WorkerImageMode = "wikimedia"
-        if config.image_mode == ImageMode.OG_IMAGE:
-            mode = "og_image"
-        if config.image_mode == ImageMode.WIKIMEDIA:
-            mode = "wikimedia"
-        result: ImageResult | None = await self.image_service.find_image(query, mode=mode)
+        result: ImageResult | None = None
+        if config.image_mode == ImageMode.OG_IMAGE and news_url:
+            result = await self.image_service.find_image(news_url, mode="og_image")
+            if not result and query:
+                result = await self.image_service.find_image(query, mode="wikimedia")
+        else:
+            result = await self.image_service.find_image(query, mode="wikimedia")
         return result.path if result else None
 
     async def _get_connection(

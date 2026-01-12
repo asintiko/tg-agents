@@ -1,6 +1,5 @@
-"use client";
+﻿"use client";
 
-import Image from "next/image";
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 
@@ -12,9 +11,10 @@ import { TelegramApi, TelegramStatus } from "../../../lib/api";
 export default function TelegramPage() {
   const projectId = Number(useParams()?.id);
   const [status, setStatus] = useState<TelegramStatus | null>(null);
-  const [qrUrl, setQrUrl] = useState<string | null>(null);
   const [passwordNeeded, setPasswordNeeded] = useState(false);
   const [password, setPassword] = useState("");
+  const [phone, setPhone] = useState("");
+  const [code, setCode] = useState("");
   const [message, setMessage] = useState("Тестовое сообщение");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -32,11 +32,14 @@ export default function TelegramPage() {
     if (projectId) loadStatus();
   }, [projectId, loadStatus]);
 
-  const startQr = async () => {
+  const startPhone = async () => {
+    if (!phone.trim()) {
+      setError("Введите номер телефона в международном формате");
+      return;
+    }
     setLoading(true);
     try {
-      const res = await TelegramApi.startQr(projectId);
-      setQrUrl(res.qr_url);
+      await TelegramApi.startPhone(projectId, phone.trim());
       setError(null);
     } catch (e) {
       setError((e as Error).message);
@@ -45,22 +48,40 @@ export default function TelegramPage() {
     }
   };
 
-  const waitQr = async () => {
-    const res = await TelegramApi.waitQr(projectId);
-    if (res.needs_password) {
-      setPasswordNeeded(true);
-    } else {
-      setPasswordNeeded(false);
-      setQrUrl(null);
-      await loadStatus();
+  const submitCode = async () => {
+    if (!code.trim()) {
+      setError("Введите код из Telegram");
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await TelegramApi.submitCode(projectId, code.trim());
+      if (res.status === "password_required") {
+        setPasswordNeeded(true);
+      } else {
+        setPasswordNeeded(false);
+        await loadStatus();
+      }
+      setError(null);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
     }
   };
 
   const sendPassword = async () => {
-    await TelegramApi.password(projectId, password);
-    setPassword("");
-    setPasswordNeeded(false);
-    await loadStatus();
+    setLoading(true);
+    try {
+      await TelegramApi.password(projectId, password);
+      setPassword("");
+      setPasswordNeeded(false);
+      await loadStatus();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const sendTest = async () => {
@@ -78,7 +99,7 @@ export default function TelegramPage() {
   const lastConnected =
     status?.last_connected_at && status.last_connected_at !== ""
       ? new Date(status.last_connected_at).toLocaleString("ru-RU", { timeZone: "Europe/Moscow" })
-      : "—";
+      : "-";
 
   return (
     <PageShell>
@@ -87,30 +108,33 @@ export default function TelegramPage() {
         <div className="grid" style={{ gap: 16 }}>
           <h2>Подключение Telegram (Telethon)</h2>
           {error && <div className="badge" style={{ background: "#b91c1c" }}>{error}</div>}
-          <div className="card grid" style={{ gap: 10 }}>
-            <div className="muted">
-              Войдите через QR-код под своим пользовательским аккаунтом Telegram. 2FA пароли
-              поддерживаются.
-            </div>
-            <button className="btn" onClick={startQr} disabled={loading}>
-              Получить QR для входа
-            </button>
-            {qrUrl && (
-              <div>
-                <div className="label">Сканируйте в мобильном Telegram</div>
-                <Image
-                  src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(
-                    qrUrl,
-                  )}`}
-                  alt="QR"
-                  width={200}
-                  height={200}
+
+          <div className="card grid" style={{ gap: 16 }}>
+            <div className="muted">Основной способ — вход по номеру телефона. 2FA поддерживается.</div>
+            <div className="card" style={{ minWidth: 360 }}>
+              <div className="label">Вход по номеру</div>
+              <div className="grid" style={{ gap: 8 }}>
+                <input
+                  className="input"
+                  placeholder="+79991234567"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
                 />
-                <button className="btn secondary" onClick={waitQr}>
-                  Я отсканировал QR
+                <button className="btn" onClick={startPhone} disabled={loading}>
+                  Отправить код на телефон
+                </button>
+                <input
+                  className="input"
+                  placeholder="Код из Telegram"
+                  value={code}
+                  onChange={(e) => setCode(e.target.value)}
+                />
+                <button className="btn secondary" onClick={submitCode} disabled={loading}>
+                  Подтвердить код
                 </button>
               </div>
-            )}
+            </div>
+
             {passwordNeeded && (
               <div className="row" style={{ gap: 8 }}>
                 <input
@@ -120,19 +144,21 @@ export default function TelegramPage() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                 />
-                <button className="btn" onClick={sendPassword}>
+                <button className="btn" onClick={sendPassword} disabled={loading}>
                   Отправить пароль
                 </button>
               </div>
             )}
           </div>
+
           <div className="card">
             <div className="muted">Статус подключения</div>
             <div style={{ fontWeight: 700, fontSize: 18 }}>
-              {status?.status ?? "—"} / каналов: {status?.channels ?? 0}
+              {status?.status ?? "-"} / каналов: {status?.channels ?? 0}
             </div>
             <div className="muted">Последнее подключение: {lastConnected}</div>
           </div>
+
           <div className="card grid">
             <div className="label">Отправить тест</div>
             <input

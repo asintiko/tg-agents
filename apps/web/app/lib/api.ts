@@ -145,6 +145,16 @@ export const TelegramApi = {
       method: "POST",
       body: JSON.stringify({ password }),
     }),
+  startPhone: (projectId: number, phone: string) =>
+    apiFetch<{ status: string }>(`/projects/${projectId}/telegram/user/phone/start`, {
+      method: "POST",
+      body: JSON.stringify({ phone }),
+    }),
+  submitCode: (projectId: number, code: string) =>
+    apiFetch<{ status: string }>(`/projects/${projectId}/telegram/user/phone/code`, {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    }),
   testMessage: (projectId: number, text: string) =>
     apiFetch<{ sent: number }>(`/projects/${projectId}/telegram/test-message`, {
       method: "POST",
@@ -178,6 +188,13 @@ export const ChannelsApi = {
   discover: () => apiFetch<DiscoveredChannel[]>(`/api/telegram/channels/discover`),
   save: (channels: DiscoveredChannel[], replace = true) =>
     apiFetch<TelegramChannel[]>(`/api/channels/save`, {
+      method: "POST",
+      body: JSON.stringify({ channels, replace }),
+    }),
+  discoverForProject: (projectId: number) =>
+    apiFetch<DiscoveredChannel[]>(`/projects/${projectId}/telegram/user/channels/discover`),
+  importForProject: (projectId: number, channels: DiscoveredChannel[], replace = true) =>
+    apiFetch<TelegramChannel[]>(`/projects/${projectId}/telegram/channels/import`, {
       method: "POST",
       body: JSON.stringify({ channels, replace }),
     }),

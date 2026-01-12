@@ -148,6 +148,14 @@ class TelegramPasswordRequest(BaseModel):
     password: str
 
 
+class TelegramPhoneRequest(BaseModel):
+    phone: str
+
+
+class TelegramPhoneCodeRequest(BaseModel):
+    code: str
+
+
 class TelegramChannelCreate(BaseModel):
     tg_chat_id: str
     title: str

@@ -15,6 +15,8 @@
 2. Заполните: `TELETHON_API_ID`, `TELETHON_API_HASH`, `ADMIN_PASSWORD`, при необходимости `GEMINI_API_KEY`.
 3. Порты снаружи: API 8001, Web 3001 (`NEXT_PUBLIC_API_BASE_URL` по умолчанию `http://localhost:8001`).
 4. Не коммитьте `node_modules`; сборка Docker использует `npm ci`.
+5. Проекты создаются с готовой конфигурацией агента и базовыми футбольными RSS-источниками.
+6. Режим изображений `og_image` подтягивает OG/Twitter image по ссылке новости, `link_preview` использует превью Telegram без скачивания картинки.
 5. Все исходные файлы должны быть в UTF-8; не сохраняйте TSX/MD в UTF-16.
 
 ## Запуск (Docker Desktop, Windows)

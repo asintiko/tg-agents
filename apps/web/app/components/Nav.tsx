@@ -1,13 +1,7 @@
 ﻿import React from "react";
 import Link from "next/link";
 
-const navItems = [
-  { href: "/start", label: "Старт" },
-  { href: "/projects", label: "Настройки" },
-  { href: "/projects", label: "Источники (RSS)" },
-  { href: "/channels", label: "Каналы" },
-  { href: "/projects", label: "Публикации / Логи" },
-];
+const navItems = [{ href: "/", label: "Проекты" }];
 
 export function Sidebar() {
   return (

@@ -13,10 +13,11 @@ from .config import get_settings
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
-def create_jwt(payload: dict[str, Any], expires_in_seconds: int = 3600) -> str:
+def create_jwt(payload: dict[str, Any], expires_in_seconds: int | None = None) -> str:
     settings = get_settings()
     now = int(time.time())
-    data = {"iat": now, "exp": now + expires_in_seconds, **payload}
+    ttl = expires_in_seconds if expires_in_seconds is not None else settings.admin_token_ttl_seconds
+    data = {"iat": now, "exp": now + ttl, **payload}
     return jwt.encode(data, settings.encryption_key, algorithm="HS256")
 
 

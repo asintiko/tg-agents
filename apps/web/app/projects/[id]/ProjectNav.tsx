@@ -1,11 +1,11 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
 import { useParams, usePathname } from "next/navigation";
 
 const tabs = [
   { slug: "settings", label: "Настройки" },
-  { slug: "sources", label: "Источники" },
+  { slug: "sources", label: "Источники (RSS)" },
   { slug: "telegram", label: "Telegram" },
   { slug: "channels", label: "Каналы" },
   { slug: "posts", label: "Публикации / Логи" },

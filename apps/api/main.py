@@ -17,12 +17,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from apps.api.auth import issue_admin_token, require_admin, verify_admin_password
 from apps.api.config import Settings, get_settings
 from apps.api.db import dispose_engine, get_async_session, init_engine, init_sessionmaker
+from apps.api.gemini import GeminiGenerator
 from apps.api.logging_config import configure_logging
 from apps.api.time_utils import MSK_TZ, msk_now, to_utc
 from apps.api.models import (
     AgentConfig,
     ConnectionStatus,
+    EmojiMode,
     FeedSource,
+    ImageMode,
     NewsItem,
     Niche,
     Post,
@@ -45,6 +48,8 @@ from apps.api.schemas import (
     TelegramChannelCreate,
     TelegramChannelOut,
     TelegramChannelUpdate,
+    TelegramPhoneCodeRequest,
+    TelegramPhoneRequest,
     TelegramDiscoveredChannel,
     TelegramChannelsListOut,
     TelegramChannelsSaveRequest,
@@ -60,8 +65,10 @@ from apps.api.telegram_user import (
     get_session_path,
     list_user_channels,
     provide_password,
+    provide_phone_code,
     reset_session,
     send_user_message,
+    start_phone_login,
     start_qr_login,
     telegram_status as telethon_status,
     wait_for_qr,
@@ -350,12 +357,28 @@ async def api_publish_next(_: AdminDep) -> dict[str, Any]:
                 detail=generated.reason_if_skip or "Контент не подходит для публикации",
             )
         text = generated.body_html
+        link_preview = config.image_mode == ImageMode.LINK_PREVIEW
+        image_path: str | None = None
+        if config.image_mode != ImageMode.LINK_PREVIEW:
+            service = ImageService(get_sessionmaker(), settings)
+            try:
+                if config.image_mode == ImageMode.OG_IMAGE:
+                    image = await service.find_image(news.url, mode="og_image")
+                    if not image and generated.image_query:
+                        image = await service.find_image(generated.image_query, mode="wikimedia")
+                else:
+                    image = await service.find_image(generated.image_query, mode="wikimedia")
+                if image:
+                    image_path = image.path
+            finally:
+                await service.close()
         try:
             message_ids = await send_user_message(
                 project.id,
                 [ch.tg_chat_id for ch in channels],
                 text,
-                image_path=None,
+                image_path=image_path,
+                link_preview=link_preview if image_path is None else False,
                 settings=settings,
             )
         except Exception as exc:  # noqa: BLE001
@@ -384,6 +407,41 @@ async def create_project(
 ) -> ProjectOut:
     project = Project(name=payload.name, niche=payload.niche)
     session.add(project)
+    await session.flush()
+
+    # Автоконфигурация агента для удобного старта в UI.
+    session.add(
+        AgentConfig(
+            project_id=project.id,
+            posts_per_day=8,
+            window_start="09:00",
+            window_end="23:59",
+            min_interval_minutes=60,
+            language="ru",
+            tone="neutral",
+            emoji_mode=EmojiMode.BASIC,
+            include_source_link=True,
+            image_mode=ImageMode.OG_IMAGE,
+        )
+    )
+
+    # Автодобавление дефолтных RSS-источников под футбол.
+    if project.niche == Niche.FOOTBALL:
+        existing_feeds = await session.scalar(
+            select(func.count()).where(FeedSource.project_id == project.id)
+        )
+        if not existing_feeds:
+            for name, url in RSSCollector.default_feeds:
+                session.add(
+                    FeedSource(
+                        project_id=project.id,
+                        name=name,
+                        url=url,
+                        enabled=True,
+                        weight=10,
+                    )
+                )
+
     await session.commit()
     await session.refresh(project)
     return project
@@ -700,6 +758,38 @@ async def update_channel(
     return channel
 
 
+async def _import_channels_for_project(
+    session: AsyncSession, project_id: int, payload: TelegramChannelsSaveRequest
+) -> list[TelegramChannel]:
+    if payload.replace:
+        await session.execute(delete(TelegramChannel).where(TelegramChannel.project_id == project_id))
+    existing_result = await session.execute(
+        select(TelegramChannel).where(TelegramChannel.project_id == project_id)
+    )
+    existing = {ch.tg_chat_id: ch for ch in existing_result.scalars().all()}
+    for ch in payload.channels:
+        if ch.tg_chat_id in existing:
+            channel = existing[ch.tg_chat_id]
+            channel.title = ch.title
+            channel.username = ch.username
+            channel.enabled = True
+        else:
+            session.add(
+                TelegramChannel(
+                    project_id=project_id,
+                    tg_chat_id=ch.tg_chat_id,
+                    title=ch.title,
+                    username=ch.username,
+                    enabled=True,
+                )
+            )
+    await session.commit()
+    result = await session.execute(
+        select(TelegramChannel).where(TelegramChannel.project_id == project_id)
+    )
+    return list(result.scalars().all())
+
+
 @app.get("/api/telegram/channels/discover", response_model=list[TelegramDiscoveredChannel])
 async def discover_channels(_: AdminDep) -> list[TelegramDiscoveredChannel]:
     tele = await telethon_status(settings)
@@ -726,33 +816,7 @@ async def save_channels(
     _: AdminDep,
 ) -> list[TelegramChannelsListOut]:
     project = await _ensure_default_project(session)
-    if payload.replace:
-        await session.execute(delete(TelegramChannel).where(TelegramChannel.project_id == project.id))
-    existing_result = await session.execute(
-        select(TelegramChannel).where(TelegramChannel.project_id == project.id)
-    )
-    existing = {ch.tg_chat_id: ch for ch in existing_result.scalars().all()}
-    for ch in payload.channels:
-        if ch.tg_chat_id in existing:
-            channel = existing[ch.tg_chat_id]
-            channel.title = ch.title
-            channel.username = ch.username
-            channel.enabled = True
-        else:
-            session.add(
-                TelegramChannel(
-                    project_id=project.id,
-                    tg_chat_id=ch.tg_chat_id,
-                    title=ch.title,
-                    username=ch.username,
-                    enabled=True,
-                )
-            )
-    await session.commit()
-    result = await session.execute(
-        select(TelegramChannel).where(TelegramChannel.project_id == project.id)
-    )
-    return list(result.scalars().all())
+    return await _import_channels_for_project(session, project.id, payload)
 
 
 @app.get("/api/channels", response_model=list[TelegramChannelsListOut])
@@ -787,6 +851,51 @@ async def patch_channel(
     return channel
 
 
+@app.get(
+    "/projects/{project_id}/telegram/user/channels/discover",
+    response_model=list[TelegramDiscoveredChannel],
+)
+async def discover_project_channels(
+    project_id: int,
+    session: SessionDep,
+    _: AdminDep,
+) -> list[TelegramDiscoveredChannel]:
+    project = await session.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Проект не найден")
+    tele = await telethon_status(settings)
+    if tele.get("status") != "connected":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Telegram не подключён: войдите по QR",
+        )
+    channels = await list_user_channels(settings)
+    return [
+        TelegramDiscoveredChannel(
+            tg_chat_id=ch["tg_chat_id"],
+            title=ch["title"],
+            username=ch.get("username"),
+        )
+        for ch in channels
+    ]
+
+
+@app.post(
+    "/projects/{project_id}/telegram/channels/import",
+    response_model=list[TelegramChannelsListOut],
+)
+async def import_project_channels(
+    project_id: int,
+    payload: TelegramChannelsSaveRequest,
+    session: SessionDep,
+    _: AdminDep,
+) -> list[TelegramChannelsListOut]:
+    project = await session.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Проект не найден")
+    return await _import_channels_for_project(session, project_id, payload)
+
+
 @app.post("/projects/{project_id}/telegram/user/qr/start")
 async def start_user_qr(
     project_id: int,
@@ -805,6 +914,41 @@ async def start_user_qr(
         return {"status": "connected", "qr_url": None}
     await session.commit()
     return {"qr_url": result.get("qr_url", ""), "status": "connecting"}
+
+
+@app.post("/projects/{project_id}/telegram/user/phone/start")
+async def start_user_phone(
+    project_id: int,
+    payload: TelegramPhoneRequest,
+    session: SessionDep,
+    _: AdminDep,
+) -> dict[str, str]:
+    try:
+        result = await start_phone_login(payload.phone, settings)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    await _ensure_connection(session, project_id, ConnectionStatus.CONNECTING)
+    await session.commit()
+    return {"status": result.get("status", "code_sent")}
+
+
+@app.post("/projects/{project_id}/telegram/user/phone/code")
+async def submit_user_phone_code(
+    project_id: int,
+    payload: TelegramPhoneCodeRequest,
+    session: SessionDep,
+    _: AdminDep,
+) -> dict[str, str]:
+    try:
+        result = await provide_phone_code(payload.code, settings)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if result.get("status") == "connected":
+        await _ensure_connection(session, project_id, ConnectionStatus.CONNECTED, msk_now())
+    elif result.get("status") == "password_required":
+        await _ensure_connection(session, project_id, ConnectionStatus.CONNECTING)
+    await session.commit()
+    return {"status": result.get("status", "connected")}
 
 
 @app.post("/projects/{project_id}/telegram/user/qr/wait")

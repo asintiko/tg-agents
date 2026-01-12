@@ -146,7 +146,14 @@ async def test_pipeline_publishes_with_user_session(monkeypatch: pytest.MonkeyPa
     )
     sent: list[str] = []
 
-    async def fake_send(project_id: int, chat_ids: list[str], text: str, image_path: str | None = None, settings: Any | None = None) -> None:  # type: ignore[override]
+    async def fake_send(
+        project_id: int,
+        chat_ids: list[str],
+        text: str,
+        image_path: str | None = None,
+        link_preview: bool | None = None,
+        settings: Any | None = None,
+    ) -> None:  # type: ignore[override]
         sent.extend(chat_ids)
 
     monkeypatch.setattr("apps.worker.pipeline.send_user_message", fake_send)

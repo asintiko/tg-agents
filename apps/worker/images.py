@@ -5,11 +5,12 @@ from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 from typing import Literal
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from html.parser import HTMLParser
 
 from apps.api.config import Settings, get_settings
 from apps.api.time_utils import msk_now
@@ -77,6 +78,8 @@ class ImageService:
 
             if mode == "wikimedia":
                 result = await self._fetch_wikimedia(image_query, query_hash)
+            elif mode == "og_image":
+                result = await self._fetch_og_image(image_query, query_hash)
             else:
                 result = None
 
@@ -120,3 +123,56 @@ class ImageService:
         file_path = images_dir / f"{query_hash}{suffix}"
         file_path.write_bytes(response.content)
         return str(file_path)
+
+    async def _fetch_og_image(self, page_url: str, query_hash: str) -> ImageResult | None:
+        try:
+            resp = await self.http.get(page_url, follow_redirects=True)
+            resp.raise_for_status()
+        except Exception:
+            return None
+        image_url = extract_og_image(resp.text, page_url)
+        if not image_url:
+            return None
+        try:
+            image_path = await self._download_image(image_url, query_hash)
+        except Exception:
+            return None
+        return ImageResult(path=image_path, source=page_url)
+
+
+class _OGParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.og_image: str | None = None
+        self.twitter_image: str | None = None
+        self.link_image: str | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attrs_dict = {k.lower(): (v or "") for k, v in attrs}
+        tag = tag.lower()
+        if tag == "meta":
+            prop = attrs_dict.get("property", "").lower()
+            name = attrs_dict.get("name", "").lower()
+            content = attrs_dict.get("content", "")
+            if prop == "og:image" and content:
+                self.og_image = content
+            elif name == "twitter:image" and content and not self.twitter_image:
+                self.twitter_image = content
+        if tag == "link":
+            rel = attrs_dict.get("rel", "").lower()
+            href = attrs_dict.get("href", "")
+            if "image_src" in rel and href:
+                self.link_image = href
+
+
+def extract_og_image(html: str, base_url: str) -> str | None:
+    """Извлекает URL изображения из OG/Twitter/link тегов и нормализует относительные ссылки."""
+    parser = _OGParser()
+    try:
+        parser.feed(html)
+    except Exception:
+        return None
+    candidate = parser.og_image or parser.twitter_image or parser.link_image
+    if not candidate:
+        return None
+    return urljoin(base_url, candidate)

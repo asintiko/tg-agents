@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     encryption_key: str = Field(default_factory=lambda: Fernet.generate_key().decode())
     admin_password: str | None = None
     app_data_dir: str = Field(default="./data")
+    admin_token_ttl_seconds: int = Field(default=86400)  # 24 часа по умолчанию
 
     def fernet(self) -> Fernet:
         return Fernet(self.encryption_key)
