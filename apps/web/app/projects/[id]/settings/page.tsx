@@ -82,7 +82,7 @@ export default function SettingsPage() {
     }
   };
 
-  const useEmoji = (emoji: CustomEmoji) => {
+  const selectEmoji = (emoji: CustomEmoji) => {
     onChange("premium_emoji_id", emoji.document_id);
     onChange("premium_emoji_alt", emoji.alt);
     setInfo(`Премиум-эмодзи установлен: ${emoji.alt}`);
@@ -312,7 +312,7 @@ export default function SettingsPage() {
                       >
                         Скопировать ссылку
                       </button>
-                      <button className="btn" onClick={() => useEmoji(emoji)}>
+                      <button className="btn" onClick={() => selectEmoji(emoji)}>
                         Использовать
                       </button>
                     </div>
