@@ -13,7 +13,12 @@ export type AgentConfig = {
   signature_html: string | null;
   emoji_mode: string;
   predictions_enabled: boolean;
+  predictions_time_msk: string;
+  predictions_matches_count: number;
   gemini_web_search: boolean;
+  web_search_enabled: boolean;
+  autopublish_enabled: boolean;
+  premium_emoji_alt: string | null;
   brand_emoji_id: string | null;
   brand_emoji_fallback: string | null;
   premium_emoji_id: number | null;
@@ -100,6 +105,22 @@ export type AutopostStatus = {
   planned_total: number;
   last_published_at: string | null;
 };
+export type ProjectStatus = {
+  worker_online: boolean;
+  worker_last_heartbeat_msk: string | null;
+  autopublish_enabled: boolean;
+  planned_today_count: number;
+  due_count: number;
+  next_planned_msk: string | null;
+  last_published_msk: string | null;
+  last_error: string | null;
+};
+
+export type CustomEmoji = {
+  document_id: number;
+  alt: string;
+  stickerset_title?: string | null;
+};
 
 function buildHeaders(init?: RequestInit): Record<string, string> {
     const headers: Record<string, string> = {
@@ -162,6 +183,22 @@ export const ProjectsApi = {
     list: () => apiFetch<Project[]>("/projects"),
     create: (name: string, niche = "football") =>
     apiFetch<Project>("/projects", { method: "POST", body: JSON.stringify({ name, niche }) }),
+};
+
+export const ProjectStatusApi = {
+  get: (projectId: number) => apiFetch<ProjectStatus>(`/projects/${projectId}/status`),
+};
+
+export const EmojisApi = {
+  sync: (projectId: number) =>
+    apiFetch<{ synced_sets: number; synced_emojis: number }>(
+      `/projects/${projectId}/telegram/emojis/sync`,
+      { method: "POST" },
+    ),
+  list: (projectId: number, query = "", limit = 50) =>
+    apiFetch<CustomEmoji[]>(
+      `/projects/${projectId}/telegram/emojis?query=${encodeURIComponent(query)}&limit=${limit}`,
+    ),
 };
 
 export const ConfigApi = {
@@ -308,6 +345,8 @@ export const PreviewApi = {
   next: () => apiFetch<PreviewResponse>("/api/preview/next", { method: "POST" }),
   nextForProject: (projectId: number) =>
     apiFetch<PreviewResponse>(`/projects/${projectId}/preview/next`, { method: "POST" }),
+  predictionPreview: (projectId: number) =>
+    apiFetch<PreviewResponse>(`/projects/${projectId}/preview/prediction`, { method: "POST" }),
   publish: () =>
     apiFetch<{ ok: boolean; news_id: number; tg_message_ids?: string[] }>(
       "/api/publish/next",
@@ -316,6 +355,11 @@ export const PreviewApi = {
   publishForProject: (projectId: number) =>
     apiFetch<{ ok: boolean; news_id: number; tg_message_ids?: string[] }>(
       `/projects/${projectId}/publish/next`,
+      { method: "POST" },
+    ),
+  publishPrediction: (projectId: number) =>
+    apiFetch<{ ok: boolean; tg_message_ids?: string[] }>(
+      `/projects/${projectId}/publish/prediction`,
       { method: "POST" },
     ),
 };

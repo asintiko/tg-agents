@@ -69,12 +69,41 @@ export default function PostsPage() {
     }
   };
 
+  const generatePredictionPreview = async () => {
+    if (!projectId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await PreviewApi.predictionPreview(projectId);
+      setPreview(res);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const publishNext = async () => {
     if (!projectId) return;
     setLoading(true);
     setError(null);
     try {
       await PreviewApi.publishForProject(projectId);
+      setPreview(null);
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const publishPrediction = async () => {
+    if (!projectId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      await PreviewApi.publishPrediction(projectId);
       setPreview(null);
       await load();
     } catch (e) {
@@ -104,8 +133,14 @@ export default function PostsPage() {
               <button className="btn secondary" onClick={generatePreview} disabled={loading}>
                 Сгенерировать превью
               </button>
+              <button className="btn secondary" onClick={generatePredictionPreview} disabled={loading}>
+                Сгенерировать прогноз (превью)
+              </button>
               <button className="btn secondary" onClick={publishNext} disabled={loading}>
                 Опубликовать следующий
+              </button>
+              <button className="btn secondary" onClick={publishPrediction} disabled={loading}>
+                Опубликовать прогноз сейчас
               </button>
               <button className="btn secondary" onClick={load} disabled={loading}>
                 Обновить

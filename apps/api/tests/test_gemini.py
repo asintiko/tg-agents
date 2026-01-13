@@ -12,7 +12,7 @@ from apps.api.models import AgentConfig, EmojiMode, ImageMode, NewsItem
 
 
 def _sample_config(
-    include_source_link: bool = True, signature_html: str | None = None
+    include_source_link: bool = False, signature_html: str | None = None
 ) -> AgentConfig:
     return AgentConfig(
         project_id=1,
@@ -26,7 +26,9 @@ def _sample_config(
         emoji_mode=EmojiMode.BASIC,
         predictions_enabled=True,
         gemini_web_search=False,
-        brand_emoji_id=None,
+        web_search_enabled=False,
+        autopublish_enabled=True,
+    brand_emoji_id=None,
         brand_emoji_fallback="⚽",
         premium_emoji_id=None,
         premium_emoji_fallback="⚡",
@@ -49,7 +51,7 @@ def _sample_news() -> NewsItem:
 
 
 @pytest.mark.asyncio
-async def test_generate_truncates_and_appends_link(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_generate_strips_scripts_and_skips_links(monkeypatch: pytest.MonkeyPatch) -> None:
     generator = GeminiGenerator(api_key=None)
     long_body = "<b>" + ("x" * 950) + "</b><script>alert('bad')</script>"
     payload = {
@@ -71,7 +73,7 @@ async def test_generate_truncates_and_appends_link(monkeypatch: pytest.MonkeyPat
 
     assert len(post.body_html) <= 900
     assert "script" not in post.body_html.lower()
-    assert '<a href="https://example.com/article">Подробнее</a>' in post.body_html
+    assert "example.com" not in post.body_html.lower()
     assert "Источник" not in post.body_html
     assert "#football" in post.body_html
     assert "---" in post.body_html

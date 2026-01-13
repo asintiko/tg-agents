@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from apps.api.config import get_settings
 from apps.api.db import init_engine, init_sessionmaker
 from apps.api.logging_config import configure_logging
-from apps.api.time_utils import MSK_TZ
-from apps.api.models import Heartbeat
+from apps.api.time_utils import MSK_TZ, msk_now, to_utc
 from apps.worker.pipeline import PostPipeline
 from apps.worker.planner import PostPlanner
 from apps.worker.rss import RSSCollector
@@ -23,10 +23,16 @@ def get_worker_status() -> str:
     return "worker alive"
 
 
-async def _write_heartbeat(session_maker: async_sessionmaker) -> None:
-    async with session_maker() as session:
-        session.add(Heartbeat(note="worker"))
-        await session.commit()
+async def _write_heartbeat(data_dir: Path) -> None:
+    data_dir.mkdir(parents=True, exist_ok=True)
+    now_msk = msk_now()
+    payload = {
+        "ts_utc": to_utc(now_msk).isoformat(),
+        "ts_msk": now_msk.isoformat(),
+        "service": "worker",
+        "jobs": ["rss", "planner", "pipeline"],
+    }
+    (data_dir / "heartbeat.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
 async def run_scheduler() -> None:
@@ -43,7 +49,8 @@ async def run_scheduler() -> None:
     scheduler.add_job(collector.pull_all, "interval", minutes=5, coalesce=True)
     scheduler.add_job(planner.plan_all_projects, "cron", hour=0, minute=5, coalesce=True)
     scheduler.add_job(pipeline.run, "interval", seconds=60, coalesce=True)
-    scheduler.add_job(_write_heartbeat, "interval", seconds=30, args=[session_maker], coalesce=True)
+    heartbeat_dir = Path(settings.app_data_dir) / "worker"
+    scheduler.add_job(_write_heartbeat, "interval", seconds=30, args=[heartbeat_dir], coalesce=True)
     scheduler.start()
     logger.info(get_worker_status())
     try:

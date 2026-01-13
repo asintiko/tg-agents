@@ -17,7 +17,14 @@ from telethon.errors import (
     SessionPasswordNeededError,
 )
 from telethon.extensions import html as telethon_html
-from telethon.tl.types import MessageEntityCustomEmoji, TypeMessageEntity
+from telethon.helpers import add_surrogate
+from telethon.tl.functions.messages import GetEmojiStickersRequest, GetStickerSetRequest
+from telethon.tl.types import (
+    DocumentAttributeCustomEmoji,
+    InputStickerSetID,
+    MessageEntityCustomEmoji,
+    TypeMessageEntity,
+)
 
 from apps.api.config import Settings, get_settings
 from apps.api.time_utils import msk_now
@@ -332,29 +339,81 @@ def parse_custom_emoji_id(raw: str | None) -> int | None:
         return None
 
 
+async def fetch_custom_emojis(settings: Settings | None = None) -> tuple[int, list[dict[str, Any]]]:
+    """Возвращает (кол-во наборов, список эмодзи) для текущей пользовательской сессии."""
+    settings = settings or get_settings()
+    _ensure_creds(settings)
+    async with _telethon_lock:
+        client = _build_client(settings)
+        await client.connect()
+        try:
+            if not await client.is_user_authorized():
+                raise ValueError("Telegram не подключён, войдите по QR")
+            sets = await client(GetEmojiStickersRequest(hash=0))
+            synced_sets = len(getattr(sets, "sets", []) or [])
+            emojis: list[dict[str, Any]] = []
+            for st in getattr(sets, "sets", []) or []:
+                try:
+                    sticker_set = await client(
+                        GetStickerSetRequest(stickerset=InputStickerSetID(id=st.id, access_hash=st.access_hash))
+                    )
+                except Exception:
+                    continue
+                title = getattr(sticker_set.set, "title", None)
+                set_id = getattr(sticker_set.set, "id", None)
+                for doc in getattr(sticker_set, "documents", []) or []:
+                    alt = None
+                    for attr in getattr(doc, "attributes", []) or []:
+                        if isinstance(attr, DocumentAttributeCustomEmoji):
+                            alt = attr.alt
+                            break
+                    if not alt:
+                        continue
+                    doc_id = getattr(doc, "id", None)
+                    if doc_id is None:
+                        continue
+                    emojis.append(
+                        {
+                            "document_id": int(doc_id),
+                            "alt": alt,
+                            "stickerset_title": title,
+                            "stickerset_id": int(set_id) if set_id else None,
+                        }
+                    )
+            return synced_sets, emojis
+        finally:
+            await client.disconnect()
+
+
 def _build_message_with_premium(
     html_text: str,
     premium_emoji_id: int | None,
+    premium_emoji_alt: str | None,
     fallback_char: str | None,
 ) -> tuple[str, list[TypeMessageEntity]]:
     text, entities = telethon_html.parse(html_text or "")
-    prefix = (fallback_char or "").strip()
+    prefix_char = (premium_emoji_alt or "").strip()
+    use_custom = bool(prefix_char and premium_emoji_id is not None)
+    if not prefix_char:
+        prefix_char = (fallback_char or "").strip()
     custom_entities: list[TypeMessageEntity] = []
-    if premium_emoji_id is not None:
-        prefix = prefix or "⚡"
+    if use_custom:
         try:
+            length_utf16 = len(add_surrogate(prefix_char))
             custom_entities.append(
-                MessageEntityCustomEmoji(offset=0, length=len(prefix), document_id=premium_emoji_id)
+                MessageEntityCustomEmoji(offset=0, length=length_utf16, document_id=premium_emoji_id)  # type: ignore[arg-type]
             )
         except Exception:
             custom_entities = []
-    if prefix:
-        spacer = " " if text else ""
-        text = f"{prefix}{spacer}{text}" if text else prefix
-        shift = len(prefix) + (1 if spacer else 0)
-        for ent in entities:
-            ent.offset += shift
-    if custom_entities:
+            use_custom = False
+    if not prefix_char:
+        return text, list(entities)
+    spacer = " " if text else ""
+    text = f"{prefix_char}{spacer}{text}" if text else prefix_char
+    shift = len(add_surrogate(prefix_char + spacer))
+    for ent in entities:
+        ent.offset += shift
+    if use_custom and custom_entities:
         entities = custom_entities + list(entities)
     return text, list(entities)
 
@@ -368,6 +427,7 @@ async def send_user_message(
     brand_emoji_id: int | str | None = None,
     brand_emoji_fallback: str | None = None,
     premium_emoji_id: int | str | None = None,
+    premium_emoji_alt: str | None = None,
     premium_emoji_fallback: str | None = None,
     settings: Settings | None = None,
 ) -> list[str]:
@@ -381,6 +441,7 @@ async def send_user_message(
             message_text, entities = _build_message_with_premium(
                 text,
                 emoji_id,
+                premium_emoji_alt if emoji_id and raw_emoji == premium_emoji_id else None,
                 (brand_emoji_fallback or premium_emoji_fallback) or ("⚡" if emoji_id else ""),
             )
             tasks: list[asyncio.Future[Any]] = []

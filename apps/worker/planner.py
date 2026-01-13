@@ -59,8 +59,11 @@ class PostPlanner:
             return None
 
         start_dt, end_dt = self._window_datetimes(cfg, target_date)
+        predictions_enabled = cfg.predictions_enabled and project.niche == Niche.FOOTBALL
+        posts_target = max(cfg.posts_per_day, 0)
+        news_count = posts_target - (1 if predictions_enabled else 0)
         times = self._generate_times(
-            posts_per_day=cfg.posts_per_day,
+            posts_per_day=news_count,
             window_start=start_dt,
             window_end=end_dt,
             min_interval_minutes=cfg.min_interval_minutes,
@@ -75,12 +78,15 @@ class PostPlanner:
             )
         )
 
-        predictions_needed = (
-            project.niche == Niche.FOOTBALL and cfg.predictions_enabled and bool(times)
-        )
+        pred_time: datetime | None = None
+        if predictions_enabled:
+            pred_time = self._predictions_time(cfg, target_date)
+            times.append(pred_time)
 
-        for idx, planned_at in enumerate(times):
-            kind = PostKind.PREDICTION if predictions_needed and idx == 0 else PostKind.NEWS
+        times.sort()
+
+        for planned_at in times:
+            kind = PostKind.PREDICTION if pred_time and planned_at == pred_time else PostKind.NEWS
             session.add(
                 Post(
                     project_id=project_id,
@@ -137,3 +143,17 @@ class PostPlanner:
                     t = window_end
             adjusted.append(t)
         return adjusted
+
+    def _predictions_time(self, cfg: AgentConfig, target_date: date) -> datetime:
+        try:
+            hh, mm = cfg.predictions_time_msk.split(":")
+            pred_time = time(int(hh), int(mm), tzinfo=MSK_TZ)
+        except Exception:
+            pred_time = time(10, 0, tzinfo=MSK_TZ)
+        desired = datetime.combine(target_date, pred_time)
+        window_start, window_end = self._window_datetimes(cfg, target_date)
+        if desired < window_start:
+            desired = window_start + timedelta(minutes=5)
+        if desired > window_end:
+            desired = window_end
+        return desired

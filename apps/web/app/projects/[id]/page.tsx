@@ -9,9 +9,10 @@ import { PageShell } from "../../components/Nav";
 import { ProjectNav } from "./ProjectNav";
 import {
   ChannelsApi,
-  AutopostApi,
   FeedSource,
-  AutopostStatus,
+  ProjectStatusApi,
+  ProjectStatus,
+  ConfigApi,
   PlanApi,
   PreviewApi,
   PreviewResponse,
@@ -31,7 +32,7 @@ export default function ProjectStartPage() {
   const [teleStatus, setTeleStatus] = useState<TelegramStatus | null>(null);
   const [channels, setChannels] = useState<TelegramChannel[]>([]);
   const [sources, setSources] = useState<FeedSource[]>([]);
-  const [autopost, setAutopost] = useState<AutopostStatus | null>(null);
+  const [status, setStatus] = useState<ProjectStatus | null>(null);
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
@@ -42,16 +43,16 @@ export default function ProjectStartPage() {
     setLoading(true);
     setError(null);
     try {
-      const [status, ch, src, auto] = await Promise.all([
+      const [tele, ch, src, stat] = await Promise.all([
         TelegramApi.status(projectId),
         ChannelsApi.list(projectId),
         SourcesApi.list(projectId),
-        AutopostApi.status(projectId),
+        ProjectStatusApi.get(projectId),
       ]);
-      setTeleStatus(status);
+      setTeleStatus(tele);
       setChannels(ch);
       setSources(src);
-      setAutopost(auto);
+      setStatus(stat);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -119,8 +120,8 @@ export default function ProjectStartPage() {
     try {
       const res = await PlanApi.planToday(projectId);
       setInfo(`План обновлён. Запланировано постов: ${res.planned}.`);
-      const auto = await AutopostApi.status(projectId);
-      setAutopost(auto);
+      const stat = await ProjectStatusApi.get(projectId);
+      setStatus(stat);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -144,13 +145,30 @@ export default function ProjectStartPage() {
     }
   };
 
-  const refreshAutopost = async () => {
+  const refreshStatus = async () => {
     if (!projectId) return;
     try {
-      const auto = await AutopostApi.status(projectId);
-      setAutopost(auto);
+      const stat = await ProjectStatusApi.get(projectId);
+      setStatus(stat);
     } catch (e) {
       setError((e as Error).message);
+    }
+  };
+
+  const toggleAutopublish = async () => {
+    if (!projectId || !status) return;
+    setLoading(true);
+    setError(null);
+    setInfo(null);
+    try {
+      await ConfigApi.upsert(projectId, { autopublish_enabled: !status.autopublish_enabled });
+      const stat = await ProjectStatusApi.get(projectId);
+      setStatus(stat);
+      setInfo(`Автопубликация ${!status.autopublish_enabled ? "включена" : "выключена"}.`);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -177,27 +195,40 @@ export default function ProjectStartPage() {
             <div className="row" style={{ alignItems: "center", gap: 8 }}>
               <div className="badge" style={{ background: "#1f2937" }}>Автопостинг</div>
               <div style={{ fontWeight: 700 }}>
-                Воркер: {autopost ? (autopost.worker_online ? "онлайн" : "офлайн") : "—"}
+                Воркер: {status ? (status.worker_online ? "онлайн" : "офлайн") : "—"}
               </div>
             </div>
             <div className="muted">
+              Автопубликация: {status ? (status.autopublish_enabled ? "включена" : "выключена") : "—"}.
               Следующий пост:{" "}
-              {autopost
-                ? autopost.next_post_at
-                  ? `${new Date(autopost.next_post_at).toLocaleString("ru-RU", { timeZone: "Europe/Moscow" })} (${autopost.next_post_kind === "prediction" ? "прогнозы" : "новости"})`
+              {status
+                ? status.next_planned_msk
+                  ? new Date(status.next_planned_msk).toLocaleString("ru-RU", { timeZone: "Europe/Moscow" })
                   : "план отсутствует — создайте его на сегодня"
-                : "загружаем..."}
-              . В очереди: {autopost ? autopost.planned_total : "—"}. Последняя публикация:{" "}
-              {autopost && autopost.last_published_at
-                ? new Date(autopost.last_published_at).toLocaleString("ru-RU", { timeZone: "Europe/Moscow" })
+                : "загружаем..."}.
+              В очереди сегодня: {status ? status.planned_today_count : "—"}, просрочено: {status ? status.due_count : "—"}.
+              Последняя публикация:{" "}
+              {status && status.last_published_msk
+                ? new Date(status.last_published_msk).toLocaleString("ru-RU", { timeZone: "Europe/Moscow" })
                 : "—"}.
+              {status?.last_error && (
+                <span className="badge" style={{ marginLeft: 8, background: "#b45309" }}>
+                  Последняя ошибка: {status.last_error}
+                </span>
+              )}
             </div>
             <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
-              <button className="btn secondary" onClick={refreshAutopost} disabled={loading}>
+              <button className="btn secondary" onClick={refreshStatus} disabled={loading}>
                 Обновить статус
+              </button>
+              <button className="btn secondary" onClick={toggleAutopublish} disabled={loading || !status}>
+                Переключить автопубликацию
               </button>
               <button className="btn secondary" onClick={planToday} disabled={loading}>
                 Сформировать план на сегодня
+              </button>
+              <button className="btn secondary" onClick={pullRss} disabled={loading}>
+                Проверить RSS сейчас
               </button>
               <button className="btn secondary" onClick={runOnce} disabled={loading}>
                 Запустить обработку сейчас
@@ -205,7 +236,7 @@ export default function ProjectStartPage() {
             </div>
             <div className="muted" style={{ fontSize: 12 }}>
               Планировщик пересчитывает очередь ежедневно в 00:05 МСК. Если очередь пуста — нажмите «Сформировать план».
-              Автопубликация работает только при подключённом Telegram и активных каналах. Если воркер офлайн — перезапустите docker compose или контейнер worker.
+              Автопубликация работает только при подключённом Telegram и активных каналах. Если воркер офлайн — перезапустите docker compose или контейнер worker. Последний heartbeat: {status?.worker_last_heartbeat_msk ? new Date(status.worker_last_heartbeat_msk).toLocaleString("ru-RU", { timeZone: "Europe/Moscow" }) : "нет данных"}.
             </div>
           </div>
 

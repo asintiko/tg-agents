@@ -65,6 +65,10 @@ class PostPipeline:
             post.status = PostStatus.FAILED
             post.error = "Не найдена конфигурация агента"
             return
+        if not config.autopublish_enabled:
+            post.status = PostStatus.SKIPPED
+            post.error = "Автопубликация отключена"
+            return
         news: NewsItem | None = None
         try:
             if post.kind == PostKind.PREDICTION:
@@ -72,7 +76,11 @@ class PostPipeline:
                     post.status = PostStatus.SKIPPED
                     post.error = "Прогнозы выключены в настройках"
                     return
-                generated = await self.generator.generate_prediction(config)
+                generated = await self.generator.generate_prediction(
+                    config,
+                    matches_count=config.predictions_matches_count or 3,
+                    force_web_search=True,
+                )
             else:
                 news = await self._resolve_news(session, post)
                 if not news:
@@ -130,6 +138,7 @@ class PostPipeline:
                     brand_emoji_id=config.brand_emoji_id,
                     brand_emoji_fallback=config.brand_emoji_fallback or "⚽",
                     premium_emoji_id=config.premium_emoji_id,
+                    premium_emoji_alt=config.premium_emoji_alt,
                     premium_emoji_fallback=config.premium_emoji_fallback or "⚡",
                     settings=self.settings,
                 )

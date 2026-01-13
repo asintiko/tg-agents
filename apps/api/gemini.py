@@ -7,6 +7,8 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable
 
+import httpx
+
 from pydantic import BaseModel, HttpUrl, ValidationError, field_validator
 
 from apps.api.config import get_settings
@@ -65,6 +67,7 @@ class PredictionContext:
 class GeminiGenerator:
     def __init__(self, api_key: str | None = None) -> None:
         self.api_key = api_key or get_settings().gemini_api_key
+        self.model_name = "gemini-1.5-flash"
         self.model: genai.GenerativeModel | None
         self.model = None
         if self.api_key:
@@ -74,7 +77,7 @@ class GeminiGenerator:
                 msg = "google-generativeai is required when GEMINI_API_KEY is set"
                 raise ImportError(msg) from exc
             genai.configure(api_key=self.api_key)
-            self.model = genai.GenerativeModel("gemini-1.5-flash")
+            self.model = genai.GenerativeModel(self.model_name)
 
     async def generate(
         self, news: NewsItem, source_name: str, config: AgentConfig
@@ -85,20 +88,20 @@ class GeminiGenerator:
             config,
             fallback=lambda: self._fallback_post(news, config),
             news_url=news.url,
-            use_web_search=config.gemini_web_search,
-            allow_link=config.include_source_link,
+            use_web_search=config.web_search_enabled or config.gemini_web_search,
         )
 
-    async def generate_prediction(self, config: AgentConfig) -> GeneratedPost:
-        context = self._prediction_context()
+    async def generate_prediction(
+        self, config: AgentConfig, matches_count: int = 3, force_web_search: bool = False
+    ) -> GeneratedPost:
+        context = self._prediction_context(matches_count)
         payload = self._build_prediction_prompt(context, config)
         return await self._generate_common(
             payload,
             config,
             fallback=lambda: self._fallback_prediction(context, config),
             news_url=context.url,
-            use_web_search=config.gemini_web_search,
-            allow_link=False,
+            use_web_search=force_web_search or config.web_search_enabled or config.gemini_web_search,
         )
 
     async def _generate_common(
@@ -109,20 +112,22 @@ class GeminiGenerator:
         fallback: Callable[[], GeneratedPost],
         news_url: str | None,
         use_web_search: bool,
-        allow_link: bool = True,
     ) -> GeneratedPost:
         last_error: Exception | None = None
-        reinforced_prompt = self._reinforce_ru_prompt(prompt)
+        base_prompt = self._reinforce_ru_prompt(prompt)
+        retry_prompt = base_prompt
+        forced_ru_prompt = self._force_ru_prompt(base_prompt)
         for _ in range(3):
             try:
-                raw = await self._call_model(reinforced_prompt, use_web_search=use_web_search)
+                raw = await self._call_model(retry_prompt, use_web_search=use_web_search)
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
                 logger.warning("Gemini call failed, fallback to stub: %s", exc)
                 break
             logger.info("Gemini raw response: %s", raw)
             try:
-                data = json.loads(raw)
+                candidate_text = self._extract_json_text(raw)
+                data = json.loads(candidate_text)
                 if news_url and "source_url" not in data:
                     data["source_url"] = news_url
                 post = GeneratedPost.model_validate(data)
@@ -130,15 +135,14 @@ class GeminiGenerator:
                     post.body_html,
                     post.hashtags,
                     config,
-                    allow_link=allow_link,
-                    news_url=news_url,
                 )
-                if not self._is_russian_text(f"{post.headline} {post.body_html}"):
-                    raise ValueError("Ответ не на русском")
+                combined = f"{post.headline} {post.body_html}"
+                if not self._has_enough_cyrillic(combined):
+                    raise ValueError("Недостаточно русских букв")
                 return post
             except (json.JSONDecodeError, ValidationError, ValueError) as exc:
                 last_error = exc
-                reinforced_prompt = self._reinforce_ru_prompt(prompt)
+                retry_prompt = forced_ru_prompt
                 continue
         logger.warning("Falling back to simple post because Gemini failed: %s", last_error)
         return fallback()
@@ -146,6 +150,7 @@ class GeminiGenerator:
     def _build_prompt(self, news: NewsItem, source_name: str, config: AgentConfig) -> str:
         summary = news.raw_summary or ""
         content = news.raw_content or ""
+        use_web = config.web_search_enabled or config.gemini_web_search
         body = (
             f"Заголовок: {news.title}\n"
             f"Ссылка: {news.url}\n"
@@ -155,17 +160,16 @@ class GeminiGenerator:
             f"Сайт/издание: {source_name}\n"
         )
         signature = config.signature_html or ""
-        include_link = "добавь естественную ссылку без слова 'Источник'" if config.include_source_link else "не добавляй ссылку"
         prompt_lines = [
-            "Ты Telegram-агент, который готовит посты про футбол только на русском языке.",
-            "Избегай английских слов и кальки, если модель возвращает английский — переведи на русский и перефразируй.",
-            "Не вставляй строку с надписью «Источник». Ссылку можно встроить в текст нейтрально (например, «подробнее по ссылке»).",
+            "Ты Telegram-агент, который готовит посты про футбол.",
+            "Пиши ТОЛЬКО на русском языке (кириллица). Никаких английских предложений. Латиницу используй только для имён команд и игроков.",
+            "Если модель вернула английский текст — переведи и верни итог только на русском.",
+            "Не вставляй строку с надписью «Источник» и не добавляй ссылку на источник в тексте.",
             "Если данных мало, устанавливай should_post=false и кратко объясняй причину в reason_if_skip.",
             "",
-            f"Язык: ru (игнорируй иные значения конфигурации, пиши только на русском)",
+            "Язык: ru (игнорируй иные значения конфигурации, пиши только на русском)",
             f"Тон: {config.tone}",
             f"Режим эмодзи: {config.emoji_mode}",
-            f"Ссылки: {include_link}",
             f"HTML подпись (добавь, если есть): {signature}",
             "",
             "Верни ТОЛЬКО корректный JSON со следующими полями:",
@@ -176,17 +180,19 @@ class GeminiGenerator:
             "Факты:",
             body,
         ]
-        if config.gemini_web_search:
+        if use_web:
             prompt_lines.append(
                 "Если нужно уточнить факты, используй веб-поиск, но итоговый текст пиши только на русском."
             )
         return "\n".join(prompt_lines).strip()
 
     def _build_prediction_prompt(self, ctx: PredictionContext, config: AgentConfig) -> str:
+        use_web = config.web_search_enabled or config.gemini_web_search
         prompt_lines = [
             "Сделай короткий редакторский пост с прогнозами на главные футбольные матчи сегодняшнего дня.",
-            "Пиши только на русском языке, избегай ставок и агрессивных обещаний. Покажи уверенность в процентах, но без гарантий.",
-            "Структура: лидовое предложение, 3-5 матчей с краткими факторами (форма, турнир, травмы, мотивация), финальный вывод.",
+            "Пиши ТОЛЬКО на русском языке (кириллица). Никаких английских предложений, латиницу используй только для имён и названий команд. Избегай ставок и агрессивных обещаний. Покажи уверенность в процентах, но без гарантий.",
+            "Структура: лидовое предложение, далее матчи с временем (МСК), кратким прогнозом, ожидаемым счётом, уверенностью (низкая/средняя/высокая), финальный вывод.",
+            "Количество матчей в прогнозе: укажи ровно столько, сколько задано ниже.",
             "Используй эмодзи умеренно, если это уместно для тона.",
             "Верни ТОЛЬКО JSON с полями headline, lead, body_html (<=900 символов), hashtags, image_query, source_url, should_post, reason_if_skip.",
             f"Тон: {config.tone}. Эмодзи режим: {config.emoji_mode}.",
@@ -198,39 +204,53 @@ class GeminiGenerator:
             f"Краткое содержание: {ctx.summary}",
             f"Полный текст: {ctx.content}",
         ]
-        if config.gemini_web_search:
+        if use_web:
             prompt_lines.append(
                 "При необходимости обратись к веб-поиску, но пиши итог только по-русски."
             )
         return "\n".join(prompt_lines).strip()
 
-    def _prediction_context(self) -> PredictionContext:
+    def _prediction_context(self, matches_count: int = 3) -> PredictionContext:
         today = msk_now().date()
         date_str = today.strftime("%d.%m.%Y")
         title = f"Прогнозы на ключевые футбольные матчи {date_str}"
         url = "https://football.example.com/predictions"
-        summary = "Нужен редакторский пост с аккуратными прогнозами без ставок и агрессивных обещаний."
+        summary = (
+            f"Нужен редакторский пост с аккуратными прогнозами без ставок и агрессивных обещаний. "
+            f"Количество матчей: {max(1, matches_count)}."
+        )
         content = (
-            "Выбери 3-5 самых заметных матчей дня (еврокубки, топ-лиги). "
+            f"Выбери {max(1, matches_count)} самых заметных матчей дня (еврокубки, топ-лиги). "
             "Для каждого матча укажи команды, турнир, краткий контекст, вероятности исхода в процентах и ключевые факторы. "
             "Избегай рекомендаций ставок, делай вывод нейтральным."
         )
         return PredictionContext(title=title, url=url, summary=summary, content=content)
+
+    def _force_ru_prompt(self, prompt: str) -> str:
+        extra = "\n\nПерепиши всё по-русски. Output JSON only."
+        return prompt if extra in prompt else f"{prompt}{extra}"
+
+    def _extract_json_text(self, raw: str) -> str:
+        """Return best-effort JSON string even if model добавила лишний текст."""
+        raw = raw.strip()
+        if raw.startswith("{"):
+            return raw
+        # Поиск первого JSON-объекта.
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if match:
+            return match.group(0)
+        # Fallback: обернуть в {}
+        return raw
 
     def _compose_body(
         self,
         raw_body: str,
         hashtags: list[str],
         config: AgentConfig,
-        *,
-        allow_link: bool,
-        news_url: str | None,
     ) -> str:
         sanitized_body = sanitize_html_for_telegram(raw_body or "")
         sanitized_body = self._strip_source_lines(sanitized_body)
         extras: list[str] = []
-        if allow_link and config.include_source_link and news_url:
-            extras.append(f'<a href="{news_url}">Подробнее</a>')
         if config.signature_html:
             extras.append(config.signature_html)
         signature_block = sanitize_html_for_telegram("\n".join(extras)) if extras else ""
@@ -254,8 +274,6 @@ class GeminiGenerator:
         body_parts = [
             sanitize_html_for_telegram(news.raw_summary or news.raw_content or news.title),
         ]
-        if config.include_source_link and news.url:
-            body_parts.append(f'<a href="{news.url}">Подробнее</a>')
         if config.signature_html:
             body_parts.append(config.signature_html)
         body = "\n\n".join(part for part in body_parts if part)
@@ -263,8 +281,6 @@ class GeminiGenerator:
             body,
             ["футбол"],
             config,
-            allow_link=config.include_source_link,
-            news_url=news.url,
         )
         return GeneratedPost(
             headline=news.title,
@@ -295,8 +311,6 @@ class GeminiGenerator:
             body,
             ["футбол", "прогноз", "матчи"],
             config,
-            allow_link=False,
-            news_url=ctx.url,
         )
         return GeneratedPost(
             headline=ctx.title,
@@ -311,19 +325,21 @@ class GeminiGenerator:
 
     def _reinforce_ru_prompt(self, prompt: str) -> str:
         hint = (
-            "\n\nВСЕГДА отвечай только на русском языке. "
+            "\n\nВСЕГДА отвечай только на русском языке (кириллица). "
             "Если модель вернула английский текст — переведи и верни итог только на русском."
         )
         return prompt if hint in prompt else f"{prompt}{hint}"
 
-    def _is_russian_text(self, text: str) -> bool:
+    def _has_enough_cyrillic(self, text: str) -> bool:
         cyr = len(re.findall(r"[А-Яа-яЁё]", text))
         lat = len(re.findall(r"[A-Za-z]", text))
-        if cyr == 0:
+        total = cyr + lat if (cyr + lat) > 0 else 1
+        ratio = cyr / total
+        if cyr < 25:
             return False
-        if lat == 0:
-            return True
-        return cyr >= lat and cyr >= 5
+        if ratio < 0.25:
+            return False
+        return True
 
     def _strip_source_lines(self, text: str) -> str:
         cleaned = re.sub(r"(?im)^\\s*источник[^\\n]*$", "", text or "")
@@ -337,25 +353,48 @@ class GeminiGenerator:
             # Fallback for local/dev without API key.
             return json.dumps(
                 {
-                    "headline": "Placeholder headline",
-                    "lead": "Placeholder lead",
-                    "body_html": "Placeholder body",
+                    "headline": "Русский заголовок-заглушка",
+                    "lead": "Краткий лид",
+                    "body_html": "Заполните GEMINI_API_KEY для генерации по-русски",
                     "hashtags": ["football"],
                     "image_query": "football stadium",
                     "source_url": "https://example.com",
                     "should_post": False,
                     "reason_if_skip": "Gemini API key not configured",
                 }
-            )
+        )
+
+        if use_web_search:
+            return await self._call_model_rest(prompt)
 
         def _sync_call() -> str:
-            kwargs: dict[str, Any] = {}
-            if use_web_search:
-                kwargs["tools"] = [{"google_search_retrieval": {}}]
-            try:
-                response = model.generate_content(prompt, **kwargs)
-            except TypeError:
-                response = model.generate_content(prompt)
+            response = model.generate_content(prompt)
             return response.text or ""
 
         return await asyncio.to_thread(_sync_call)
+
+    async def _call_model_rest(self, prompt: str) -> str:
+        """Call Gemini via REST with google_search tool (grounding)."""
+        if not self.api_key:
+            return "{}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent"
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": self.api_key,
+        }
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "tools": [{"google_search": {}}],
+        }
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.post(url, headers=headers, json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+        text_chunks: list[str] = []
+        for cand in data.get("candidates", []) or []:
+            content = cand.get("content") or {}
+            for part in content.get("parts", []) or []:
+                value = part.get("text")
+                if value:
+                    text_chunks.append(str(value))
+        return "\n".join(text_chunks).strip()

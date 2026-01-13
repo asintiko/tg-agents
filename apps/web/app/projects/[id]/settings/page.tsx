@@ -6,14 +6,18 @@ import { useParams } from "next/navigation";
 import { AuthGate } from "../../../components/AuthGate";
 import { PageShell } from "../../../components/Nav";
 import { ProjectNav } from "../ProjectNav";
-import { AgentConfig, ConfigApi } from "../../../lib/api";
+import { AgentConfig, ConfigApi, CustomEmoji, EmojisApi } from "../../../lib/api";
 
 export default function SettingsPage() {
   const params = useParams();
   const projectId = Number(params?.id);
   const [config, setConfig] = useState<AgentConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [emojiLoading, setEmojiLoading] = useState(false);
+  const [emojiSearch, setEmojiSearch] = useState("");
+  const [emojis, setEmojis] = useState<CustomEmoji[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -27,9 +31,26 @@ export default function SettingsPage() {
     }
   }, [projectId]);
 
+  const loadEmojis = useCallback(async () => {
+    if (!projectId) return;
+    setEmojiLoading(true);
+    try {
+      const list = await EmojisApi.list(projectId, emojiSearch);
+      setEmojis(list);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setEmojiLoading(false);
+    }
+  }, [projectId, emojiSearch]);
+
   useEffect(() => {
     if (projectId) load();
   }, [projectId, load]);
+
+  useEffect(() => {
+    if (projectId) void loadEmojis();
+  }, [projectId, loadEmojis]);
 
   const update = async () => {
     if (!config) return;
@@ -38,11 +59,33 @@ export default function SettingsPage() {
       const data = await ConfigApi.upsert(projectId, config);
       setConfig(data);
       setError(null);
+      setInfo("Настройки сохранены");
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setLoading(false);
     }
+  };
+
+  const syncEmojis = async () => {
+    if (!projectId) return;
+    setEmojiLoading(true);
+    setError(null);
+    try {
+      await EmojisApi.sync(projectId);
+      await loadEmojis();
+      setInfo("Премиум-эмодзи синхронизированы");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setEmojiLoading(false);
+    }
+  };
+
+  const useEmoji = (emoji: CustomEmoji) => {
+    onChange("premium_emoji_id", emoji.document_id);
+    onChange("premium_emoji_alt", emoji.alt);
+    setInfo(`Премиум-эмодзи установлен: ${emoji.alt}`);
   };
 
   const onChange = (field: keyof AgentConfig, value: any) => {
@@ -58,6 +101,7 @@ export default function SettingsPage() {
           Настройте расписание и формат постов. Все тексты публикуются только на русском языке; при выходе модели на английский текст система повторит генерацию и зафиксирует русский вариант.
         </div>
         {error && <div className="badge" style={{ background: "#b91c1c" }}>{error}</div>}
+        {info && <div className="badge" style={{ background: "#065f46" }}>{info}</div>}
         {!config && <div className="muted">Загрузка...</div>}
         {config && (
           <div className="grid" style={{ gap: 12 }}>
@@ -105,16 +149,6 @@ export default function SettingsPage() {
                   value={config.tone}
                   onChange={(e) => onChange("tone", e.target.value)}
                 />
-              </div>
-              <div style={{ flex: 1 }}>
-                <div className="label">Язык</div>
-                <input
-                  className="input"
-                  value={config.language}
-                  readOnly
-                  disabled
-                />
-                <div className="muted" style={{ fontSize: 12 }}>Фиксировано: все посты — только на русском.</div>
               </div>
             </div>
             <div>
@@ -183,17 +217,9 @@ export default function SettingsPage() {
                   <option value="link_preview">Без поиска картинки</option>
                 </select>
               </div>
-              <div style={{ flex: 1 }}>
-                <div className="label">Добавлять ссылку на источник</div>
-                <input
-                  type="checkbox"
-                  checked={config.include_source_link}
-                  onChange={(e) => onChange("include_source_link", e.target.checked)}
-                />
-              </div>
             </div>
-            <div className="row">
-              <div style={{ flex: 1 }}>
+            <div className="row" style={{ gap: 12, flexWrap: "wrap" }}>
+              <div style={{ flex: 1, minWidth: 240 }}>
                 <div className="label">Прогнозы матчей (1 раз в день)</div>
                 <label className="muted" style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <input
@@ -204,17 +230,99 @@ export default function SettingsPage() {
                   Включить ежедневный пост с прогнозами на топ-матчи (футбольная ниша).
                 </label>
               </div>
-              <div style={{ flex: 1 }}>
+              <div style={{ flex: 1, minWidth: 200 }}>
+                <div className="label">Время прогноза (МСК)</div>
+                <input
+                  className="input"
+                  value={config.predictions_time_msk}
+                  onChange={(e) => onChange("predictions_time_msk", e.target.value)}
+                  placeholder="10:00"
+                />
+                <div className="muted" style={{ fontSize: 12 }}>Если время вне окна — будет сдвинуто внутрь окна.</div>
+              </div>
+              <div style={{ flex: 1, minWidth: 200 }}>
+                <div className="label">Кол-во матчей в прогнозе</div>
+                <input
+                  className="input"
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={config.predictions_matches_count}
+                  onChange={(e) => onChange("predictions_matches_count", Number(e.target.value))}
+                />
+              </div>
+              <div style={{ flex: 1, minWidth: 240 }}>
                 <div className="label">Gemini Web Search (Google)</div>
                 <label className="muted" style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <input
                     type="checkbox"
-                    checked={config.gemini_web_search}
-                    onChange={(e) => onChange("gemini_web_search", e.target.checked)}
+                    checked={config.web_search_enabled}
+                    onChange={(e) => onChange("web_search_enabled", e.target.checked)}
                   />
                   При генерации можно обращаться к поиску Google для уточнения фактов.
                 </label>
               </div>
+            </div>
+            <div className="card" style={{ gap: 8 }}>
+              <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <div className="label">Премиум-эмодзи (синхронизация из Telegram)</div>
+                  <div className="muted" style={{ fontSize: 12 }}>
+                    Синхронизируйте ваши премиум-эмодзи и выберите символ. В тексте поста он будет добавлен в начале.
+                  </div>
+                </div>
+                <button className="btn secondary" onClick={syncEmojis} disabled={emojiLoading}>
+                  {emojiLoading ? "Синхронизируем..." : "Синхронизировать"}
+                </button>
+              </div>
+              <div className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <input
+                  className="input"
+                  placeholder="Поиск по эмодзи или названию набора"
+                  value={emojiSearch}
+                  onChange={(e) => setEmojiSearch(e.target.value)}
+                  style={{ maxWidth: 280 }}
+                />
+                <button className="btn secondary" onClick={loadEmojis} disabled={emojiLoading}>
+                  Найти
+                </button>
+              </div>
+              <div className="grid" style={{ gap: 6 }}>
+                {emojis.map((emoji) => (
+                  <div
+                    key={emoji.document_id}
+                    className="row"
+                    style={{
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      borderBottom: "1px solid var(--border)",
+                      paddingBottom: 6,
+                    }}
+                  >
+                    <div className="grid" style={{ gap: 2 }}>
+                      <div style={{ fontSize: 18 }}>{emoji.alt}</div>
+                      <div className="muted" style={{ fontSize: 12 }}>
+                        {emoji.stickerset_title || "Без названия"} · tg://emoji?id={emoji.document_id}
+                      </div>
+                    </div>
+                    <div className="row" style={{ gap: 8 }}>
+                      <button
+                        className="btn secondary"
+                        onClick={() => navigator.clipboard.writeText(`tg://emoji?id=${emoji.document_id}`)}
+                      >
+                        Скопировать ссылку
+                      </button>
+                      <button className="btn" onClick={() => useEmoji(emoji)}>
+                        Использовать
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                {emojis.length === 0 && <div className="muted">Нет эмодзи. Нажмите «Синхронизировать».</div>}
+              </div>
+            </div>
+            <div className="muted" style={{ fontSize: 12 }}>
+              Посты всегда публикуются на русском, ссылки на источник автоматически не добавляются.
             </div>
             <button className="btn" onClick={update} disabled={loading}>
               {loading ? "Сохраняю..." : "Сохранить"}

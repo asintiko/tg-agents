@@ -17,6 +17,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    BigInteger,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -128,12 +129,17 @@ class AgentConfig(Base):
         default=EmojiMode.OFF,
     )
     predictions_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    predictions_time_msk: Mapped[str] = mapped_column(String(5), default="10:00", nullable=False)
+    predictions_matches_count: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
     gemini_web_search: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    web_search_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    autopublish_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     brand_emoji_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     brand_emoji_fallback: Mapped[str | None] = mapped_column(String(16), default="⚽", nullable=True)
-    premium_emoji_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    premium_emoji_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     premium_emoji_fallback: Mapped[str | None] = mapped_column(String(16), default="⚡", nullable=True)
-    include_source_link: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    premium_emoji_alt: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    include_source_link: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     image_mode: Mapped[ImageMode] = mapped_column(
         Enum(ImageMode, values_callable=enum_values, name="imagemode"),
         default=ImageMode.WIKIMEDIA,
@@ -273,6 +279,18 @@ class ImageCache(Base):
     source: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class CustomEmoji(Base):
+    __tablename__ = "custom_emojis"
+
+    document_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    alt: Mapped[str] = mapped_column(String(64), nullable=False)
+    stickerset_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    stickerset_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
 

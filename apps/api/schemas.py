@@ -38,12 +38,17 @@ class AgentConfigUpdate(BaseModel):
     signature_html: str | None = None
     emoji_mode: EmojiMode = EmojiMode.OFF
     predictions_enabled: bool = True
+    predictions_time_msk: str = Field(default="10:00")
+    predictions_matches_count: int = Field(default=3)
     gemini_web_search: bool = False
+    web_search_enabled: bool = False
+    autopublish_enabled: bool = True
     brand_emoji_id: str | None = None
     brand_emoji_fallback: str | None = "⚽"
     premium_emoji_id: int | None = None
     premium_emoji_fallback: str | None = "⚡"
-    include_source_link: bool = True
+    premium_emoji_alt: str | None = None
+    include_source_link: bool = False
     image_mode: ImageMode = ImageMode.WIKIMEDIA
 
 
@@ -214,3 +219,20 @@ class AutopostStatusOut(BaseModel):
     next_post_kind: PostKind | None
     planned_total: int
     last_published_at: datetime | None
+
+
+class ProjectStatusOut(BaseModel):
+    worker_online: bool
+    worker_last_heartbeat_msk: datetime | None
+    autopublish_enabled: bool
+    planned_today_count: int
+    due_count: int
+    next_planned_msk: datetime | None
+    last_published_msk: datetime | None
+    last_error: str | None
+
+
+class CustomEmojiOut(BaseModel):
+    document_id: int
+    alt: str
+    stickerset_title: str | None = None

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
-from typing import Annotated, cast
+from typing import Annotated, Any, cast
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,7 +25,6 @@ from apps.api.models import (
     AgentConfig,
     ConnectionStatus,
     EmojiMode,
-    Heartbeat,
     FeedSource,
     ImageMode,
     NewsItem,
@@ -33,6 +33,7 @@ from apps.api.models import (
     PostKind,
     PostStatus,
     Project,
+    CustomEmoji,
     TelegramChannel,
     TelegramConnection,
 )
@@ -43,6 +44,7 @@ from apps.api.schemas import (
     FeedSourceOut,
     LoginRequest,
     AutopostStatusOut,
+    ProjectStatusOut,
     NewsItemOut,
     PostOut,
     ProjectCreate,
@@ -63,9 +65,11 @@ from apps.api.schemas import (
     TestPostResponse,
     TestMessageRequest,
     TokenResponse,
+    CustomEmojiOut,
 )
 from apps.api.telegram_user import (
     get_session_path,
+    fetch_custom_emojis,
     list_user_channels,
     provide_password,
     provide_phone_code,
@@ -159,6 +163,18 @@ def get_sessionmaker() -> async_sessionmaker[AsyncSession]:
     return init_sessionmaker(settings)
 
 
+def _read_worker_heartbeat(settings: Settings) -> dict[str, Any] | None:
+    path = Path(settings.app_data_dir) / "worker" / "heartbeat.json"
+    if not path.exists():
+        return None
+    try:
+        raw = path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+        return data
+    except Exception:  # noqa: BLE001
+        return None
+
+
 async def _ensure_connection(
     session: AsyncSession,
     project_id: int,
@@ -216,12 +232,17 @@ def _config_template(project_id: int) -> AgentConfig:
         signature_html=None,
         emoji_mode=EmojiMode.BASIC,
         predictions_enabled=True,
+        predictions_time_msk="10:00",
+        predictions_matches_count=3,
         gemini_web_search=False,
+        web_search_enabled=False,
+        autopublish_enabled=True,
         brand_emoji_id=None,
         brand_emoji_fallback="⚽",
         premium_emoji_id=None,
         premium_emoji_fallback="⚡",
-        include_source_link=True,
+        premium_emoji_alt=None,
+        include_source_link=False,
         image_mode=ImageMode.OG_IMAGE,
     )
 
@@ -392,13 +413,16 @@ async def api_publish_next(_: AdminDep) -> dict[str, Any]:
             message_ids = await send_user_message(
                 project.id,
                 [ch.tg_chat_id for ch in channels],
-            text,
-            image_path=image_path,
-            link_preview=link_preview if image_path is None else False,
-            brand_emoji_id=config.brand_emoji_id,
-            brand_emoji_fallback=config.brand_emoji_fallback or "⚽",
-            settings=settings,
-        )
+                text,
+                image_path=image_path,
+                link_preview=link_preview if image_path is None else False,
+                brand_emoji_id=config.brand_emoji_id,
+                brand_emoji_fallback=config.brand_emoji_fallback or "⚽",
+                premium_emoji_id=config.premium_emoji_id,
+                premium_emoji_alt=config.premium_emoji_alt,
+                premium_emoji_fallback=config.premium_emoji_fallback or "⚡",
+                settings=settings,
+            )
         except Exception as exc:  # noqa: BLE001
             logger.exception("Failed to publish next news: %s", exc)
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Не удалось отправить пост") from exc
@@ -435,6 +459,33 @@ async def project_preview_next(
     generated = await generator.generate(news, news.source.name if news.source else "", config)
     return {
         "news_id": news.id,
+        "headline": generated.headline,
+        "body_html": generated.body_html,
+        "image_query": generated.image_query,
+        "should_post": generated.should_post,
+        "reason_if_skip": generated.reason_if_skip,
+    }
+
+
+@app.post("/projects/{project_id}/preview/prediction")
+async def project_preview_prediction(
+    project_id: int,
+    session: SessionDep,
+    _: AdminDep,
+) -> dict[str, Any]:
+    project = await session.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Проект не найден")
+    config = await _ensure_default_config(session, project.id)
+    if not config.predictions_enabled:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Прогнозы отключены")
+    generator = GeminiGenerator()
+    generated = await generator.generate_prediction(
+        config,
+        matches_count=config.predictions_matches_count or 3,
+        force_web_search=True,
+    )
+    return {
         "headline": generated.headline,
         "body_html": generated.body_html,
         "image_query": generated.image_query,
@@ -504,6 +555,9 @@ async def project_publish_next(
             link_preview=link_preview if image_path is None else False,
             brand_emoji_id=config.brand_emoji_id,
             brand_emoji_fallback=config.brand_emoji_fallback or "⚽",
+            premium_emoji_id=config.premium_emoji_id,
+            premium_emoji_alt=config.premium_emoji_alt,
+            premium_emoji_fallback=config.premium_emoji_fallback or "⚡",
             settings=settings,
         )
     except Exception as exc:  # noqa: BLE001
@@ -523,6 +577,79 @@ async def project_publish_next(
     session.add(post)
     await session.commit()
     return {"ok": True, "tg_message_ids": message_ids, "news_id": news.id}
+
+
+@app.post("/projects/{project_id}/publish/prediction")
+async def project_publish_prediction(
+    project_id: int,
+    session: SessionDep,
+    _: AdminDep,
+) -> dict[str, Any]:
+    project = await session.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Проект не найден")
+    config = await _ensure_default_config(session, project.id)
+    if not config.predictions_enabled:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Прогнозы отключены")
+    tele = await telethon_status(settings)
+    if tele.get("status") != "connected":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Telegram не подключён")
+    channels_result = await session.execute(
+        select(TelegramChannel)
+        .where(
+            TelegramChannel.project_id == project.id,
+            TelegramChannel.enabled.is_(True),
+        )
+        .order_by(TelegramChannel.id)
+    )
+    channels = list(channels_result.scalars().all())
+    if not channels:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Выберите хотя бы один канал")
+    generator = GeminiGenerator()
+    generated = await generator.generate_prediction(
+        config,
+        matches_count=config.predictions_matches_count or 3,
+        force_web_search=True,
+    )
+    if not generated.should_post:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=generated.reason_if_skip or "Контент не подходит для публикации",
+        )
+    text = generated.body_html
+    try:
+        message_ids = await send_user_message(
+            project.id,
+            [ch.tg_chat_id for ch in channels],
+            text,
+            image_path=None,
+            link_preview=False,
+            brand_emoji_id=config.brand_emoji_id,
+            brand_emoji_fallback=config.brand_emoji_fallback or "⚽",
+            premium_emoji_id=config.premium_emoji_id,
+            premium_emoji_alt=config.premium_emoji_alt,
+            premium_emoji_fallback=config.premium_emoji_fallback or "⚡",
+            settings=settings,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Failed to publish prediction for project %s: %s", project.id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail="Не удалось отправить пост"
+        ) from exc
+
+    post = Post(
+        project_id=project.id,
+        news_item_id=None,
+        kind=PostKind.PREDICTION,
+        status=PostStatus.PUBLISHED,
+        planned_at=to_utc(msk_now()),
+        published_at=to_utc(msk_now()),
+        tg_message_id=",".join(message_ids) if message_ids else None,
+        payload_json=generated.model_dump(mode="json"),
+    )
+    session.add(post)
+    await session.commit()
+    return {"ok": True, "tg_message_ids": message_ids}
 
 
 @app.post("/projects", response_model=ProjectOut, status_code=status.HTTP_201_CREATED)
@@ -751,13 +878,14 @@ async def autopost_status(
     _: AdminDep,
 ) -> AutopostStatusOut:
     now_utc = to_utc(msk_now())
-    hb_result = await session.execute(
-        select(Heartbeat).order_by(Heartbeat.created_at.desc()).limit(1)
-    )
-    heartbeat = hb_result.scalar_one_or_none()
-    worker_online = bool(
-        heartbeat and heartbeat.created_at and heartbeat.created_at >= now_utc - timedelta(minutes=2)
-    )
+    hb = _read_worker_heartbeat(settings)
+    hb_ts = None
+    if hb and hb.get("ts_utc"):
+        try:
+            hb_ts = datetime.fromisoformat(str(hb["ts_utc"]))
+        except Exception:  # noqa: BLE001
+            hb_ts = None
+    worker_online = bool(hb_ts and hb_ts >= now_utc - timedelta(seconds=90))
     next_result = await session.execute(
         select(Post)
         .where(Post.project_id == project_id, Post.status == PostStatus.PLANNED)
@@ -779,12 +907,161 @@ async def autopost_status(
     last_published_at = last_published.scalar_one_or_none()
     return AutopostStatusOut(
         worker_online=worker_online,
-        last_heartbeat=heartbeat.created_at if heartbeat else None,
+        last_heartbeat=hb_ts,
         next_post_at=next_post.planned_at if next_post else None,
         next_post_kind=next_post.kind if next_post else None,
         planned_total=int(planned_total or 0),
         last_published_at=last_published_at,
     )
+
+
+@app.get("/projects/{project_id}/status", response_model=ProjectStatusOut)
+async def project_status(
+    project_id: int,
+    session: SessionDep,
+    _: AdminDep,
+) -> ProjectStatusOut:
+    project = await session.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Проект не найден")
+
+    config = await _ensure_default_config(session, project_id)
+    now_msk = msk_now()
+    now_utc = to_utc(now_msk)
+
+    hb = _read_worker_heartbeat(settings)
+    hb_ts_utc = None
+    hb_ts_msk = None
+    if hb:
+        ts_utc_raw = hb.get("ts_utc")
+        ts_msk_raw = hb.get("ts_msk")
+        try:
+            hb_ts_utc = datetime.fromisoformat(str(ts_utc_raw)) if ts_utc_raw else None
+        except Exception:  # noqa: BLE001
+            hb_ts_utc = None
+        try:
+            hb_ts_msk = datetime.fromisoformat(str(ts_msk_raw)) if ts_msk_raw else None
+        except Exception:  # noqa: BLE001
+            hb_ts_msk = hb_ts_utc.astimezone(MSK_TZ) if hb_ts_utc else None
+    worker_online = bool(hb_ts_utc and hb_ts_utc >= now_utc - timedelta(seconds=90))
+
+    day_start = datetime.combine(now_msk.date(), time.min, tzinfo=MSK_TZ)
+    day_end = day_start + timedelta(days=1)
+    planned_today = await session.scalar(
+        select(func.count())
+        .select_from(Post)
+        .where(
+            Post.project_id == project_id,
+            Post.status == PostStatus.PLANNED,
+            Post.planned_at >= to_utc(day_start),
+            Post.planned_at < to_utc(day_end),
+        )
+    )
+    due_count = await session.scalar(
+        select(func.count())
+        .select_from(Post)
+        .where(
+            Post.project_id == project_id,
+            Post.status == PostStatus.PLANNED,
+            Post.planned_at <= now_utc,
+        )
+    )
+    next_planned = await session.execute(
+        select(Post.planned_at)
+        .where(
+            Post.project_id == project_id,
+            Post.status == PostStatus.PLANNED,
+            Post.planned_at > now_utc,
+        )
+        .order_by(Post.planned_at)
+        .limit(1)
+    )
+    next_planned_at = next_planned.scalar_one_or_none()
+    last_published = await session.execute(
+        select(Post.published_at)
+        .where(Post.project_id == project_id, Post.status == PostStatus.PUBLISHED)
+        .order_by(Post.published_at.desc())
+        .limit(1)
+    )
+    last_published_at = last_published.scalar_one_or_none()
+    last_error = await session.execute(
+        select(Post.error)
+        .where(Post.project_id == project_id, Post.error.is_not(None))
+        .order_by(Post.updated_at.desc())
+        .limit(1)
+    )
+    last_error_msg = last_error.scalar_one_or_none()
+    return ProjectStatusOut(
+        worker_online=worker_online,
+        worker_last_heartbeat_msk=hb_ts_msk,
+        autopublish_enabled=config.autopublish_enabled,
+        planned_today_count=int(planned_today or 0),
+        due_count=int(due_count or 0),
+        next_planned_msk=next_planned_at.astimezone(MSK_TZ) if next_planned_at else None,
+        last_published_msk=last_published_at.astimezone(MSK_TZ) if last_published_at else None,
+        last_error=last_error_msg,
+    )
+
+
+@app.post("/projects/{project_id}/telegram/emojis/sync")
+async def sync_custom_emojis_endpoint(
+    project_id: int,
+    session: SessionDep,
+    _: AdminDep,
+) -> dict[str, int]:
+    project = await session.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Проект не найден")
+    try:
+        sets_count, emojis = await fetch_custom_emojis(settings)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    synced = 0
+    for item in emojis:
+        doc_id = int(item.get("document_id"))
+        alt = str(item.get("alt") or "").strip()
+        if not alt:
+            continue
+        existing = await session.get(CustomEmoji, doc_id)
+        if existing:
+            existing.alt = alt
+            existing.stickerset_title = item.get("stickerset_title")
+            existing.stickerset_id = item.get("stickerset_id")
+        else:
+            session.add(
+                CustomEmoji(
+                    document_id=doc_id,
+                    alt=alt,
+                    stickerset_title=item.get("stickerset_title"),
+                    stickerset_id=item.get("stickerset_id"),
+                )
+            )
+        synced += 1
+    await session.commit()
+    return {"synced_sets": sets_count, "synced_emojis": synced}
+
+
+@app.get("/projects/{project_id}/telegram/emojis", response_model=list[CustomEmojiOut])
+async def list_custom_emojis(
+    project_id: int,
+    session: SessionDep,
+    _: AdminDep,
+    query: str = "",
+    limit: int = 50,
+) -> list[CustomEmojiOut]:
+    project = await session.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Проект не найден")
+    stmt = select(CustomEmoji).order_by(CustomEmoji.updated_at.desc())
+    if query:
+        pattern = f"%{query.lower()}%"
+        stmt = stmt.where(
+            func.lower(CustomEmoji.alt).like(pattern)
+            | func.lower(CustomEmoji.stickerset_title).like(pattern)
+        )
+    stmt = stmt.limit(max(1, min(limit, 200)))
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
 
 
 @app.post("/projects/{project_id}/feeds/pull")
@@ -1223,6 +1500,7 @@ async def send_test_message(
             payload.text,
             image_path=payload.image_path,
             premium_emoji_id=config.premium_emoji_id if config else None,
+            premium_emoji_alt=config.premium_emoji_alt if config else None,
             premium_emoji_fallback=(config.premium_emoji_fallback if config else None) or "⚡",
         )
     except FileNotFoundError as exc:
@@ -1269,6 +1547,7 @@ async def api_test_post(_: AdminDep, session: SessionDep) -> TestPostResponse:
             text,
             image_path=None,
             premium_emoji_id=config.premium_emoji_id,
+            premium_emoji_alt=config.premium_emoji_alt,
             premium_emoji_fallback=config.premium_emoji_fallback or "⚡",
             settings=settings,
         )
