@@ -122,6 +122,8 @@ class AgentConfig(Base):
         Enum(EmojiMode, values_callable=enum_values, name="emojimode"),
         default=EmojiMode.OFF,
     )
+    brand_emoji_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    brand_emoji_fallback: Mapped[str | None] = mapped_column(String(16), default="⚽", nullable=True)
     premium_emoji_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     premium_emoji_fallback: Mapped[str | None] = mapped_column(String(16), default="⚡", nullable=True)
     include_source_link: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

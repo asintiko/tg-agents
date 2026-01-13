@@ -24,6 +24,7 @@ from apps.api.time_utils import msk_now
 
 SESSION_FILENAME = "account.session"
 STATUS_FILENAME = "status.json"
+_telethon_lock = asyncio.Lock()
 
 
 @dataclass(slots=True)
@@ -117,177 +118,9 @@ def _read_status(settings: Settings) -> dict[str, Any]:
 async def start_qr_login(settings: Settings | None = None) -> dict[str, Any]:
     settings = settings or get_settings()
     _ensure_creds(settings)
-    global _pending
-    global _pending_phone
-    if _pending:
-        try:
-            await _pending.client.disconnect()
-        except Exception:
-            pass
-        _pending = None
-    if _pending_phone:
-        try:
-            await _pending_phone.client.disconnect()
-        except Exception:
-            pass
-        _pending_phone = None
-    client = _build_client(settings)
-    await client.connect()
-    if await client.is_user_authorized():
-        me = await client.get_me()
-        photo_b64 = await _download_photo_b64(client, me)
-        await client.disconnect()
-        _write_status(settings, "connected", me, photo_b64)
-        return {"status": "connected", "me": _serialize_me(me), "me_photo_b64": photo_b64}
-
-    qr_login = await client.qr_login()
-    _pending = PendingLogin(client=client, qr_login=qr_login, session_path=_session_path(settings))
-    _write_status(settings, "waiting_for_scan")
-    return {"status": "waiting_for_scan", "qr_url": qr_login.url}
-
-
-async def wait_for_qr(settings: Settings | None = None) -> dict[str, Any]:
-    global _pending
-    settings = settings or get_settings()
-    if not _pending:
-        raise ValueError("QR-код не запущен или уже истёк, запустите сканирование заново")
-    try:
-        await _pending.qr_login.wait()
-        me = await _pending.client.get_me()
-        photo_b64 = await _download_photo_b64(_pending.client, me)
-        await _pending.client.disconnect()
-        _write_status(settings, "connected", me, photo_b64)
-        return {"status": "connected", "me": _serialize_me(me), "me_photo_b64": photo_b64}
-    except SessionPasswordNeededError:
-        _pending.awaiting_password = True
-        _write_status(settings, "password_required")
-        return {"status": "password_required"}
-    except Exception as exc:  # noqa: BLE001
-        await _pending.client.disconnect()
-        _write_status(settings, "disconnected")
-        raise ValueError(f"QR устарел или недействителен, запустите заново ({exc})") from exc
-    finally:
-        if _pending and not _pending.awaiting_password:
-            _pending = None
-
-
-async def start_phone_login(phone: str, settings: Settings | None = None) -> dict[str, Any]:
-    settings = settings or get_settings()
-    phone = phone.strip()
-    if not phone:
-        raise ValueError("Укажите номер телефона в международном формате")
-    _ensure_creds(settings)
-    global _pending
-    global _pending_phone
-    # Сброс любых старых сессий ожидания.
-    if _pending:
-        try:
-            await _pending.client.disconnect()
-        except Exception:
-            pass
-        _pending = None
-    if _pending_phone:
-        try:
-            await _pending_phone.client.disconnect()
-        except Exception:
-            pass
-        _pending_phone = None
-
-    client = _build_client(settings)
-    await client.connect()
-    if await client.is_user_authorized():
-        me = await client.get_me()
-        await client.disconnect()
-        _write_status(settings, "connected", me)
-        return {"status": "connected", "me": _serialize_me(me)}
-
-    try:
-        sent = await client.send_code_request(phone)
-    except Exception:
-        await client.disconnect()
-        raise
-    _pending_phone = PendingPhone(
-        client=client,
-        phone=phone,
-        code_hash=getattr(sent, "phone_code_hash", None) or "",
-    )
-    _write_status(settings, "waiting_for_code")
-    return {"status": "waiting_for_code"}
-
-
-async def provide_phone_code(code: str, settings: Settings | None = None) -> dict[str, Any]:
-    settings = settings or get_settings()
-    global _pending_phone
-    if not _pending_phone:
-        raise ValueError("Код не ожидается, запустите вход по номеру заново")
-    try:
-        if not _pending_phone.client.is_connected():
-            await _pending_phone.client.connect()
-        await _pending_phone.client.sign_in(
-            phone=_pending_phone.phone,
-            code=code,
-            phone_code_hash=_pending_phone.code_hash or None,
-        )
-        me = await _pending_phone.client.get_me()
-        photo_b64 = await _download_photo_b64(_pending_phone.client, me)
-        _write_status(settings, "connected", me, photo_b64)
-        return {"status": "connected", "me": _serialize_me(me), "me_photo_b64": photo_b64}
-    except SessionPasswordNeededError:
-        _pending_phone.awaiting_password = True
-        _write_status(settings, "password_required")
-        return {"status": "password_required"}
-    except PhoneCodeInvalidError as exc:
-        await _pending_phone.client.disconnect()
-        _pending_phone = None
-        _write_status(settings, "disconnected")
-        raise ValueError("Неверный код из Telegram, запросите новый.") from exc
-    except PhoneCodeExpiredError as exc:
-        await _pending_phone.client.disconnect()
-        _pending_phone = None
-        _write_status(settings, "disconnected")
-        raise ValueError("Срок действия кода истёк, отправьте запрос ещё раз.") from exc
-    except Exception as exc:  # noqa: BLE001
-        await _pending_phone.client.disconnect()
-        _pending_phone = None
-        _write_status(settings, "disconnected")
-        raise ValueError(f"Не удалось войти по коду: {exc}") from exc
-    finally:
-        if _pending_phone and not _pending_phone.awaiting_password:
-            await _pending_phone.client.disconnect()
-            _pending_phone = None
-
-
-async def provide_password(password: str, settings: Settings | None = None) -> dict[str, Any]:
-    global _pending
-    global _pending_phone
-    settings = settings or get_settings()
-    if not ((_pending and _pending.awaiting_password) or (_pending_phone and _pending_phone.awaiting_password)):
-        raise ValueError("Текущая сессия не ждёт пароль, перезапустите вход")
-    try:
-        if _pending and _pending.awaiting_password:
-            if not _pending.client.is_connected():
-                await _pending.client.connect()
-            await _pending.client.sign_in(password=password)
-            me = await _pending.client.get_me()
-            photo_b64 = await _download_photo_b64(_pending.client, me)
-            _write_status(settings, "connected", me, photo_b64)
-            return {"status": "connected", "me": _serialize_me(me), "me_photo_b64": photo_b64}
-        if _pending_phone and _pending_phone.awaiting_password:
-            if not _pending_phone.client.is_connected():
-                await _pending_phone.client.connect()
-            await _pending_phone.client.sign_in(password=password)
-            me = await _pending_phone.client.get_me()
-            photo_b64 = await _download_photo_b64(_pending_phone.client, me)
-            _write_status(settings, "connected", me, photo_b64)
-            return {"status": "connected", "me": _serialize_me(me), "me_photo_b64": photo_b64}
-        raise ValueError("Текущая сессия не ждёт пароль, перезапустите вход")
-    except PasswordHashInvalidError as exc:
-        raise ValueError("Неверный пароль 2FA") from exc
-    except SessionPasswordNeededError as exc:
-        raise ValueError("Требуется пароль 2FA") from exc
-    except Exception as exc:  # noqa: BLE001
-        raise ValueError("Не удалось завершить вход, перезапустите QR") from exc
-    finally:
+    async with _telethon_lock:
+        global _pending
+        global _pending_phone
         if _pending:
             try:
                 await _pending.client.disconnect()
@@ -300,6 +133,179 @@ async def provide_password(password: str, settings: Settings | None = None) -> d
             except Exception:
                 pass
             _pending_phone = None
+        client = _build_client(settings)
+        await client.connect()
+        if await client.is_user_authorized():
+            me = await client.get_me()
+            photo_b64 = await _download_photo_b64(client, me)
+            await client.disconnect()
+            _write_status(settings, "connected", me, photo_b64)
+            return {"status": "connected", "me": _serialize_me(me), "me_photo_b64": photo_b64}
+
+        qr_login = await client.qr_login()
+        _pending = PendingLogin(client=client, qr_login=qr_login, session_path=_session_path(settings))
+        _write_status(settings, "waiting_for_scan")
+        return {"status": "waiting_for_scan", "qr_url": qr_login.url}
+
+
+async def wait_for_qr(settings: Settings | None = None) -> dict[str, Any]:
+    global _pending
+    settings = settings or get_settings()
+    if not _pending:
+        raise ValueError("QR-код не запущен или уже истёк, запустите сканирование заново")
+    async with _telethon_lock:
+        try:
+            await _pending.qr_login.wait()
+            me = await _pending.client.get_me()
+            photo_b64 = await _download_photo_b64(_pending.client, me)
+            await _pending.client.disconnect()
+            _write_status(settings, "connected", me, photo_b64)
+            return {"status": "connected", "me": _serialize_me(me), "me_photo_b64": photo_b64}
+        except SessionPasswordNeededError:
+            _pending.awaiting_password = True
+            _write_status(settings, "password_required")
+            return {"status": "password_required"}
+        except Exception as exc:  # noqa: BLE001
+            await _pending.client.disconnect()
+            _write_status(settings, "disconnected")
+            raise ValueError(f"QR устарел или недействителен, запустите заново ({exc})") from exc
+        finally:
+            if _pending and not _pending.awaiting_password:
+                _pending = None
+
+
+async def start_phone_login(phone: str, settings: Settings | None = None) -> dict[str, Any]:
+    settings = settings or get_settings()
+    phone = phone.strip()
+    if not phone:
+        raise ValueError("Укажите номер телефона в международном формате")
+    _ensure_creds(settings)
+    async with _telethon_lock:
+        global _pending
+        global _pending_phone
+        # Сброс любых старых сессий ожидания.
+        if _pending:
+            try:
+                await _pending.client.disconnect()
+            except Exception:
+                pass
+            _pending = None
+        if _pending_phone:
+            try:
+                await _pending_phone.client.disconnect()
+            except Exception:
+                pass
+            _pending_phone = None
+
+        client = _build_client(settings)
+        await client.connect()
+        if await client.is_user_authorized():
+            me = await client.get_me()
+            await client.disconnect()
+            _write_status(settings, "connected", me)
+            return {"status": "connected", "me": _serialize_me(me)}
+
+        try:
+            sent = await client.send_code_request(phone)
+        except Exception:
+            await client.disconnect()
+            raise
+        _pending_phone = PendingPhone(
+            client=client,
+            phone=phone,
+            code_hash=getattr(sent, "phone_code_hash", None) or "",
+        )
+        _write_status(settings, "waiting_for_code")
+        return {"status": "waiting_for_code"}
+
+
+async def provide_phone_code(code: str, settings: Settings | None = None) -> dict[str, Any]:
+    settings = settings or get_settings()
+    global _pending_phone
+    if not _pending_phone:
+        raise ValueError("Код не ожидается, запустите вход по номеру заново")
+    async with _telethon_lock:
+        try:
+            if not _pending_phone.client.is_connected():
+                await _pending_phone.client.connect()
+            await _pending_phone.client.sign_in(
+                phone=_pending_phone.phone,
+                code=code,
+                phone_code_hash=_pending_phone.code_hash or None,
+            )
+            me = await _pending_phone.client.get_me()
+            photo_b64 = await _download_photo_b64(_pending_phone.client, me)
+            _write_status(settings, "connected", me, photo_b64)
+            return {"status": "connected", "me": _serialize_me(me), "me_photo_b64": photo_b64}
+        except SessionPasswordNeededError:
+            _pending_phone.awaiting_password = True
+            _write_status(settings, "password_required")
+            return {"status": "password_required"}
+        except PhoneCodeInvalidError as exc:
+            await _pending_phone.client.disconnect()
+            _pending_phone = None
+            _write_status(settings, "disconnected")
+            raise ValueError("Неверный код из Telegram, запросите новый.") from exc
+        except PhoneCodeExpiredError as exc:
+            await _pending_phone.client.disconnect()
+            _pending_phone = None
+            _write_status(settings, "disconnected")
+            raise ValueError("Срок действия кода истёк, отправьте запрос ещё раз.") from exc
+        except Exception as exc:  # noqa: BLE001
+            await _pending_phone.client.disconnect()
+            _pending_phone = None
+            _write_status(settings, "disconnected")
+            raise ValueError(f"Не удалось войти по коду: {exc}") from exc
+        finally:
+            if _pending_phone and not _pending_phone.awaiting_password:
+                await _pending_phone.client.disconnect()
+                _pending_phone = None
+
+
+async def provide_password(password: str, settings: Settings | None = None) -> dict[str, Any]:
+    global _pending
+    global _pending_phone
+    settings = settings or get_settings()
+    if not ((_pending and _pending.awaiting_password) or (_pending_phone and _pending_phone.awaiting_password)):
+        raise ValueError("Текущая сессия не ждёт пароль, перезапустите вход")
+    async with _telethon_lock:
+        try:
+            if _pending and _pending.awaiting_password:
+                if not _pending.client.is_connected():
+                    await _pending.client.connect()
+                await _pending.client.sign_in(password=password)
+                me = await _pending.client.get_me()
+                photo_b64 = await _download_photo_b64(_pending.client, me)
+                _write_status(settings, "connected", me, photo_b64)
+                return {"status": "connected", "me": _serialize_me(me), "me_photo_b64": photo_b64}
+            if _pending_phone and _pending_phone.awaiting_password:
+                if not _pending_phone.client.is_connected():
+                    await _pending_phone.client.connect()
+                await _pending_phone.client.sign_in(password=password)
+                me = await _pending_phone.client.get_me()
+                photo_b64 = await _download_photo_b64(_pending_phone.client, me)
+                _write_status(settings, "connected", me, photo_b64)
+                return {"status": "connected", "me": _serialize_me(me), "me_photo_b64": photo_b64}
+            raise ValueError("Текущая сессия не ждёт пароль, перезапустите вход")
+        except PasswordHashInvalidError as exc:
+            raise ValueError("Неверный пароль 2FA") from exc
+        except SessionPasswordNeededError as exc:
+            raise ValueError("Требуется пароль 2FA") from exc
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError("Не удалось завершить вход, перезапустите QR") from exc
+        finally:
+            if _pending:
+                try:
+                    await _pending.client.disconnect()
+                except Exception:
+                    pass
+                _pending = None
+            if _pending_phone:
+                try:
+                    await _pending_phone.client.disconnect()
+                except Exception:
+                    pass
+                _pending_phone = None
 
 
 def parse_entity(chat_id: str) -> int | str:
@@ -359,54 +365,58 @@ async def send_user_message(
     text: str,
     image_path: str | None = None,
     link_preview: bool | None = None,
+    brand_emoji_id: int | str | None = None,
+    brand_emoji_fallback: str | None = None,
     premium_emoji_id: int | str | None = None,
     premium_emoji_fallback: str | None = None,
     settings: Settings | None = None,
 ) -> list[str]:
     settings = settings or get_settings()
-    client = _build_client(settings)
-    await client.connect()
-    try:
-        emoji_id = parse_custom_emoji_id(str(premium_emoji_id) if premium_emoji_id is not None else None)
-        message_text, entities = _build_message_with_premium(
-            text,
-            emoji_id,
-            premium_emoji_fallback or ("⚡" if emoji_id else ""),
-        )
-        tasks: list[asyncio.Future[Any]] = []
-        for chat_id in chat_ids:
-            entity = parse_entity(chat_id)
-            if image_path:
-                tasks.append(
-                    asyncio.create_task(
-                        client.send_file(
-                            entity,
-                            image_path,
-                            caption=message_text,
-                            parse_mode=None,
-                            caption_entities=entities,
+    async with _telethon_lock:
+        client = _build_client(settings)
+        await client.connect()
+        try:
+            raw_emoji = brand_emoji_id if brand_emoji_id is not None else premium_emoji_id
+            emoji_id = parse_custom_emoji_id(str(raw_emoji) if raw_emoji is not None else None)
+            message_text, entities = _build_message_with_premium(
+                text,
+                emoji_id,
+                (brand_emoji_fallback or premium_emoji_fallback) or ("⚡" if emoji_id else ""),
+            )
+            tasks: list[asyncio.Future[Any]] = []
+            for chat_id in chat_ids:
+                entity = parse_entity(chat_id)
+                if image_path:
+                    tasks.append(
+                        asyncio.create_task(
+                            client.send_file(
+                                entity,
+                                image_path,
+                                caption=message_text,
+                                parse_mode=None,
+                                caption_entities=entities,
+                            )
                         )
                     )
-                )
-            else:
-                kwargs: dict[str, Any] = {
-                    "parse_mode": None,
-                    "formatting_entities": entities,
-                }
-                if link_preview is not None:
-                    kwargs["link_preview"] = link_preview
-                tasks.append(
-                    asyncio.create_task(client.send_message(entity, message_text, **kwargs))
-                )
-        results = await asyncio.gather(*tasks)
-        ids: list[str] = []
-        for res in results:
-            msg_id = getattr(res, "id", None)
-            if msg_id is not None:
-                ids.append(str(msg_id))
-        return ids
-    finally:
-        await client.disconnect()
+                else:
+                    kwargs: dict[str, Any] = {
+                        "parse_mode": None,
+                        "formatting_entities": entities,
+                    }
+                    if link_preview is not None:
+                        kwargs["link_preview"] = link_preview
+                    tasks.append(
+                        asyncio.create_task(client.send_message(entity, message_text, **kwargs))
+                    )
+            results = await asyncio.gather(*tasks)
+            ids: list[str] = []
+            for res in results:
+                msg_id = getattr(res, "id", None)
+                if msg_id is not None:
+                    ids.append(str(msg_id))
+            return ids
+        finally:
+            await client.disconnect()
 
 
 async def telegram_status(settings: Settings | None = None) -> dict[str, Any]:
@@ -416,10 +426,28 @@ async def telegram_status(settings: Settings | None = None) -> dict[str, Any]:
         return status
 
     if status.get("status") == "connected":
-        client = _build_client(settings)
-        try:
-            await client.connect()
-            if not await client.is_user_authorized():
+        async with _telethon_lock:
+            client = _build_client(settings)
+            try:
+                await client.connect()
+                if not await client.is_user_authorized():
+                    _write_status(settings, "disconnected")
+                    return {
+                        "status": "disconnected",
+                        "last_connected_at": status.get("last_connected_at"),
+                        "me": None,
+                        "me_photo_b64": None,
+                    }
+                me = await client.get_me()
+                photo_b64 = await _download_photo_b64(client, me)
+                _write_status(settings, "connected", me, photo_b64)
+                return {
+                    "status": "connected",
+                    "last_connected_at": status.get("last_connected_at"),
+                    "me": _serialize_me(me),
+                    "me_photo_b64": photo_b64,
+                }
+            except AuthKeyUnregisteredError:
                 _write_status(settings, "disconnected")
                 return {
                     "status": "disconnected",
@@ -427,25 +455,8 @@ async def telegram_status(settings: Settings | None = None) -> dict[str, Any]:
                     "me": None,
                     "me_photo_b64": None,
                 }
-            me = await client.get_me()
-            photo_b64 = await _download_photo_b64(client, me)
-            _write_status(settings, "connected", me, photo_b64)
-            return {
-                "status": "connected",
-                "last_connected_at": status.get("last_connected_at"),
-                "me": _serialize_me(me),
-                "me_photo_b64": photo_b64,
-            }
-        except AuthKeyUnregisteredError:
-            _write_status(settings, "disconnected")
-            return {
-                "status": "disconnected",
-                "last_connected_at": status.get("last_connected_at"),
-                "me": None,
-                "me_photo_b64": None,
-            }
-        finally:
-            await client.disconnect()
+            finally:
+                await client.disconnect()
 
     return status
 
@@ -476,32 +487,33 @@ def reset_session(settings: Settings | None = None) -> None:
 
 async def list_user_channels(settings: Settings | None = None) -> list[dict[str, Any]]:
     settings = settings or get_settings()
-    client = _build_client(settings)
-    await client.connect()
-    try:
-        if not await client.is_user_authorized():
-            raise ValueError("Аккаунт не подключён, сначала авторизуйтесь по QR")
-        channels: list[dict[str, Any]] = []
-        async for dialog in client.iter_dialogs():
-            if not dialog.is_channel:
-                continue
-            entity = dialog.entity
-            can_post = bool(getattr(entity, "creator", False))
-            rights = getattr(entity, "admin_rights", None)
-            if rights:
-                can_post = can_post or bool(getattr(rights, "post_messages", False)) or bool(
-                    getattr(rights, "edit_messages", False)
+    async with _telethon_lock:
+        client = _build_client(settings)
+        await client.connect()
+        try:
+            if not await client.is_user_authorized():
+                raise ValueError("Аккаунт не подключён, сначала авторизуйтесь по QR")
+            channels: list[dict[str, Any]] = []
+            async for dialog in client.iter_dialogs():
+                if not dialog.is_channel:
+                    continue
+                entity = dialog.entity
+                can_post = bool(getattr(entity, "creator", False))
+                rights = getattr(entity, "admin_rights", None)
+                if rights:
+                    can_post = can_post or bool(getattr(rights, "post_messages", False)) or bool(
+                        getattr(rights, "edit_messages", False)
+                    )
+                role = "creator" if getattr(entity, "creator", False) else ("admin" if rights else "member")
+                channels.append(
+                    {
+                        "tg_chat_id": str(dialog.id),
+                        "title": dialog.name,
+                        "username": getattr(entity, "username", None),
+                        "can_post": can_post,
+                        "role": role,
+                    }
                 )
-            role = "creator" if getattr(entity, "creator", False) else ("admin" if rights else "member")
-            channels.append(
-                {
-                    "tg_chat_id": str(dialog.id),
-                    "title": dialog.name,
-                    "username": getattr(entity, "username", None),
-                    "can_post": can_post,
-                    "role": role,
-                }
-            )
-        return channels
-    finally:
-        await client.disconnect()
+            return channels
+        finally:
+            await client.disconnect()

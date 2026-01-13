@@ -37,6 +37,8 @@ class AgentConfigUpdate(BaseModel):
     tone: str = Field(default="neutral")
     signature_html: str | None = None
     emoji_mode: EmojiMode = EmojiMode.OFF
+    brand_emoji_id: str | None = None
+    brand_emoji_fallback: str | None = "⚽"
     premium_emoji_id: int | None = None
     premium_emoji_fallback: str | None = "⚡"
     include_source_link: bool = True

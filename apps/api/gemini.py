@@ -71,7 +71,12 @@ class GeminiGenerator:
         payload = self._build_prompt(news, source_name, config)
         last_error: Exception | None = None
         for _ in range(3):
-            raw = await self._call_model(payload)
+            try:
+                raw = await self._call_model(payload)
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                logger.warning("Gemini call failed, fallback to stub: %s", exc)
+                break
             logger.info("Gemini raw response: %s", raw)
             try:
                 data = json.loads(raw)
@@ -102,8 +107,8 @@ class GeminiGenerator:
             except (json.JSONDecodeError, ValidationError) as exc:
                 last_error = exc
                 continue
-        msg = f"Failed to generate valid post: {last_error}"
-        raise ValueError(msg)
+        logger.warning("Falling back to simple post because Gemini failed: %s", last_error)
+        return self._fallback_post(news, source_name, config)
 
     def _build_prompt(self, news: NewsItem, source_name: str, config: AgentConfig) -> str:
         summary = news.raw_summary or ""
@@ -138,6 +143,27 @@ class GeminiGenerator:
             body,
         ]
         return "\n".join(prompt_lines).strip()
+
+    def _fallback_post(self, news: NewsItem, source_name: str, config: AgentConfig) -> GeneratedPost:
+        """Plain fallback when Gemini недоступен."""
+        body_parts = [
+            sanitize_html_for_telegram(news.raw_summary or news.raw_content or news.title),
+        ]
+        if config.include_source_link:
+            body_parts.append(f'Источник: <a href="{news.url}">{news.url}</a>')
+        if config.signature_html:
+            body_parts.append(config.signature_html)
+        body = "\n\n".join(part for part in body_parts if part)
+        return GeneratedPost(
+            headline=news.title,
+            lead=news.raw_summary or news.title,
+            body_html=_enforce_length(body),
+            hashtags=[],
+            image_query="",
+            source_url=news.url,  # type: ignore[arg-type]
+            should_post=True,
+            reason_if_skip=None,
+        )
 
     async def _call_model(self, prompt: str) -> str:
         model = self.model

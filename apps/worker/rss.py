@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+import calendar
 from datetime import datetime
 from typing import Any
 from urllib.parse import parse_qsl, urlparse, urlunparse
@@ -166,9 +167,7 @@ class RSSCollector:
         published_at = None
         published_struct = entry.get("published_parsed")
         if published_struct:
-            published_at = datetime.fromtimestamp(
-                feedparser._mktime_tz(published_struct), tz=MSK_TZ
-            )
+            published_at = datetime.fromtimestamp(calendar.timegm(published_struct), tz=MSK_TZ)
         summary = str(entry.get("summary") or "").strip() or None
         content = None
         if entry.get("content"):

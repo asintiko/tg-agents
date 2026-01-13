@@ -212,6 +212,8 @@ def _config_template(project_id: int) -> AgentConfig:
         tone="neutral",
         signature_html=None,
         emoji_mode=EmojiMode.BASIC,
+        brand_emoji_id=None,
+        brand_emoji_fallback="⚽",
         premium_emoji_id=None,
         premium_emoji_fallback="⚡",
         include_source_link=True,

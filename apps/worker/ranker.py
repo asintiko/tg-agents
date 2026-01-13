@@ -5,6 +5,7 @@ from datetime import datetime
 
 from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from apps.api.models import FeedSource, NewsItem, Post, PostStatus
 
@@ -28,6 +29,7 @@ async def pick_next_news_item(session: AsyncSession, project_id: int) -> NewsIte
 
     result = await session.execute(
         select(NewsItem, FeedSource.weight)
+        .options(selectinload(NewsItem.source))
         .join(FeedSource, FeedSource.id == NewsItem.source_id, isouter=True)
         .where(
             NewsItem.project_id == project_id,
@@ -35,7 +37,7 @@ async def pick_next_news_item(session: AsyncSession, project_id: int) -> NewsIte
         )
     )
     candidates: Sequence[tuple[NewsItem, int | None]] = [
-        (row[0], row[1]) for row in result.all()
+        (row[0], row[1]) for row in result.unique().all()
     ]
     if not candidates:
         return None
