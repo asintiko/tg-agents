@@ -55,7 +55,7 @@ export default function SettingsPage() {
         <ProjectNav />
         <h2>Конфигурация агента</h2>
         <div className="muted" style={{ marginBottom: 8 }}>
-          Настройте расписание и формат постов. После изменений нажмите «Сохранить».
+          Настройте расписание и формат постов. Все тексты публикуются только на русском языке; при выходе модели на английский текст система повторит генерацию и зафиксирует русский вариант.
         </div>
         {error && <div className="badge" style={{ background: "#b91c1c" }}>{error}</div>}
         {!config && <div className="muted">Загрузка...</div>}
@@ -111,8 +111,10 @@ export default function SettingsPage() {
                 <input
                   className="input"
                   value={config.language}
-                  onChange={(e) => onChange("language", e.target.value)}
+                  readOnly
+                  disabled
                 />
+                <div className="muted" style={{ fontSize: 12 }}>Фиксировано: все посты — только на русском.</div>
               </div>
             </div>
             <div>
@@ -188,6 +190,30 @@ export default function SettingsPage() {
                   checked={config.include_source_link}
                   onChange={(e) => onChange("include_source_link", e.target.checked)}
                 />
+              </div>
+            </div>
+            <div className="row">
+              <div style={{ flex: 1 }}>
+                <div className="label">Прогнозы матчей (1 раз в день)</div>
+                <label className="muted" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={config.predictions_enabled}
+                    onChange={(e) => onChange("predictions_enabled", e.target.checked)}
+                  />
+                  Включить ежедневный пост с прогнозами на топ-матчи (футбольная ниша).
+                </label>
+              </div>
+              <div style={{ flex: 1 }}>
+                <div className="label">Gemini Web Search (Google)</div>
+                <label className="muted" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={config.gemini_web_search}
+                    onChange={(e) => onChange("gemini_web_search", e.target.checked)}
+                  />
+                  При генерации можно обращаться к поиску Google для уточнения фактов.
+                </label>
               </div>
             </div>
             <button className="btn" onClick={update} disabled={loading}>

@@ -17,6 +17,7 @@ from apps.api.models import (
     ImageMode,
     NewsItem,
     Post,
+    PostKind,
     PostStatus,
     TelegramChannel,
     TelegramConnection,
@@ -64,15 +65,23 @@ class PostPipeline:
             post.status = PostStatus.FAILED
             post.error = "Не найдена конфигурация агента"
             return
-        news = await self._resolve_news(session, post)
-        if not news:
-            post.status = PostStatus.FAILED
-            post.error = "Нет подходящих новостей"
-            return
+        news: NewsItem | None = None
         try:
-            generated = await self.generator.generate(
-                news, news.source.name if news.source else "", config
-            )
+            if post.kind == PostKind.PREDICTION:
+                if not config.predictions_enabled:
+                    post.status = PostStatus.SKIPPED
+                    post.error = "Прогнозы выключены в настройках"
+                    return
+                generated = await self.generator.generate_prediction(config)
+            else:
+                news = await self._resolve_news(session, post)
+                if not news:
+                    post.status = PostStatus.FAILED
+                    post.error = "Нет подходящих новостей"
+                    return
+                generated = await self.generator.generate(
+                    news, news.source.name if news.source else "", config
+                )
         except Exception as exc:  # noqa: BLE001
             logger.exception("Gemini generation failed for post %s: %s", post.id, exc)
             post.status = PostStatus.FAILED
@@ -92,7 +101,9 @@ class PostPipeline:
             return
 
         text = generated.body_html
-        image_path = await self._maybe_find_image(config, generated.image_query, news.url if news else None)
+        image_path = await self._maybe_find_image(
+            config, generated.image_query, news.url if news else None
+        )
         link_preview = config.image_mode == ImageMode.LINK_PREVIEW and image_path is None
 
         connection = await self._get_connection(session, post.project_id)
@@ -116,6 +127,8 @@ class PostPipeline:
                     text,
                     image_path=image_path,
                     link_preview=link_preview,
+                    brand_emoji_id=config.brand_emoji_id,
+                    brand_emoji_fallback=config.brand_emoji_fallback or "⚽",
                     premium_emoji_id=config.premium_emoji_id,
                     premium_emoji_fallback=config.premium_emoji_fallback or "⚡",
                     settings=self.settings,
@@ -186,8 +199,10 @@ class PostPipeline:
         return list(result.scalars().all())
 
     async def _passes_guardrails(
-        self, session: AsyncSession, post: Post, generated: Any, news: NewsItem
+        self, session: AsyncSession, post: Post, generated: Any, news: NewsItem | None
     ) -> tuple[bool, str | None]:
+        if news is None:
+            return True, None
         recent = await self._recent_headlines(session, post.project_id)
         if self._is_similar(generated.headline, recent):
             return False, "Похоже на недавний пост"

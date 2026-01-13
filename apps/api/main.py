@@ -24,11 +24,13 @@ from apps.api.models import (
     AgentConfig,
     ConnectionStatus,
     EmojiMode,
+    Heartbeat,
     FeedSource,
     ImageMode,
     NewsItem,
     Niche,
     Post,
+    PostKind,
     PostStatus,
     Project,
     TelegramChannel,
@@ -40,6 +42,7 @@ from apps.api.schemas import (
     FeedSourceCreate,
     FeedSourceOut,
     LoginRequest,
+    AutopostStatusOut,
     NewsItemOut,
     PostOut,
     ProjectCreate,
@@ -212,6 +215,8 @@ def _config_template(project_id: int) -> AgentConfig:
         tone="neutral",
         signature_html=None,
         emoji_mode=EmojiMode.BASIC,
+        predictions_enabled=True,
+        gemini_web_search=False,
         brand_emoji_id=None,
         brand_emoji_fallback="⚽",
         premium_emoji_id=None,
@@ -398,14 +403,15 @@ async def api_publish_next(_: AdminDep) -> dict[str, Any]:
             logger.exception("Failed to publish next news: %s", exc)
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Не удалось отправить пост") from exc
 
-        post = Post(
-            project_id=project.id,
-            news_item_id=news.id,
-            status=PostStatus.PUBLISHED,
-            planned_at=to_utc(msk_now()),
-            published_at=to_utc(msk_now()),
-            tg_message_id=",".join(message_ids) if message_ids else None,
-            payload_json=generated.model_dump(mode="json"),
+    post = Post(
+        project_id=project.id,
+        news_item_id=news.id,
+        kind=PostKind.NEWS,
+        status=PostStatus.PUBLISHED,
+        planned_at=to_utc(msk_now()),
+        published_at=to_utc(msk_now()),
+        tg_message_id=",".join(message_ids) if message_ids else None,
+        payload_json=generated.model_dump(mode="json"),
         )
         session.add(post)
         await session.commit()
@@ -507,6 +513,7 @@ async def project_publish_next(
     post = Post(
         project_id=project.id,
         news_item_id=news.id,
+        kind=PostKind.NEWS,
         status=PostStatus.PUBLISHED,
         planned_at=to_utc(msk_now()),
         published_at=to_utc(msk_now()),
@@ -735,6 +742,49 @@ async def get_plan(
         .order_by(Post.planned_at)
     )
     return list(result.scalars().all())
+
+
+@app.get("/projects/{project_id}/autopost/status", response_model=AutopostStatusOut)
+async def autopost_status(
+    project_id: int,
+    session: SessionDep,
+    _: AdminDep,
+) -> AutopostStatusOut:
+    now_utc = to_utc(msk_now())
+    hb_result = await session.execute(
+        select(Heartbeat).order_by(Heartbeat.created_at.desc()).limit(1)
+    )
+    heartbeat = hb_result.scalar_one_or_none()
+    worker_online = bool(
+        heartbeat and heartbeat.created_at and heartbeat.created_at >= now_utc - timedelta(minutes=2)
+    )
+    next_result = await session.execute(
+        select(Post)
+        .where(Post.project_id == project_id, Post.status == PostStatus.PLANNED)
+        .order_by(Post.planned_at)
+        .limit(1)
+    )
+    next_post = next_result.scalar_one_or_none()
+    planned_total = await session.scalar(
+        select(func.count())
+        .select_from(Post)
+        .where(Post.project_id == project_id, Post.status == PostStatus.PLANNED)
+    )
+    last_published = await session.execute(
+        select(Post.published_at)
+        .where(Post.project_id == project_id, Post.status == PostStatus.PUBLISHED)
+        .order_by(Post.published_at.desc())
+        .limit(1)
+    )
+    last_published_at = last_published.scalar_one_or_none()
+    return AutopostStatusOut(
+        worker_online=worker_online,
+        last_heartbeat=heartbeat.created_at if heartbeat else None,
+        next_post_at=next_post.planned_at if next_post else None,
+        next_post_kind=next_post.kind if next_post else None,
+        planned_total=int(planned_total or 0),
+        last_published_at=last_published_at,
+    )
 
 
 @app.post("/projects/{project_id}/feeds/pull")

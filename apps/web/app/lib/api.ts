@@ -12,6 +12,10 @@ export type AgentConfig = {
   tone: string;
   signature_html: string | null;
   emoji_mode: string;
+  predictions_enabled: boolean;
+  gemini_web_search: boolean;
+  brand_emoji_id: string | null;
+  brand_emoji_fallback: string | null;
   premium_emoji_id: number | null;
   premium_emoji_fallback: string | null;
   include_source_link: boolean;
@@ -71,9 +75,12 @@ export type NewsItem = {
 };
 export type Post = {
     id: number;
+    kind: string;
     status: string;
     planned_at: string;
     published_at: string | null;
+    tg_message_id?: string | null;
+    payload_json?: any;
     error: string | null;
 };
 export type TestPostResponse = { ok: boolean; tg_message_id?: string | null };
@@ -84,6 +91,14 @@ export type PreviewResponse = {
   image_query?: string;
   should_post?: boolean;
   reason_if_skip?: string | null;
+};
+export type AutopostStatus = {
+  worker_online: boolean;
+  last_heartbeat: string | null;
+  next_post_at: string | null;
+  next_post_kind: string | null;
+  planned_total: number;
+  last_published_at: string | null;
 };
 
 function buildHeaders(init?: RequestInit): Record<string, string> {
@@ -275,6 +290,11 @@ export const PlanApi = {
     apiFetch<{ planned: number }>(`/projects/${projectId}/plan/today`, { method: "POST" }),
   runOnce: (projectId: number) =>
     apiFetch<{ processed: number }>(`/projects/${projectId}/run-once`, { method: "POST" }),
+};
+
+export const AutopostApi = {
+  status: (projectId: number) =>
+    apiFetch<AutopostStatus>(`/projects/${projectId}/autopost/status`),
 };
 
 export const PostsApi = {

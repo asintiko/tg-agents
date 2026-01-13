@@ -9,7 +9,10 @@ import { PageShell } from "../../components/Nav";
 import { ProjectNav } from "./ProjectNav";
 import {
   ChannelsApi,
+  AutopostApi,
   FeedSource,
+  AutopostStatus,
+  PlanApi,
   PreviewApi,
   PreviewResponse,
   SourcesApi,
@@ -28,6 +31,7 @@ export default function ProjectStartPage() {
   const [teleStatus, setTeleStatus] = useState<TelegramStatus | null>(null);
   const [channels, setChannels] = useState<TelegramChannel[]>([]);
   const [sources, setSources] = useState<FeedSource[]>([]);
+  const [autopost, setAutopost] = useState<AutopostStatus | null>(null);
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
@@ -38,14 +42,16 @@ export default function ProjectStartPage() {
     setLoading(true);
     setError(null);
     try {
-      const [status, ch, src] = await Promise.all([
+      const [status, ch, src, auto] = await Promise.all([
         TelegramApi.status(projectId),
         ChannelsApi.list(projectId),
         SourcesApi.list(projectId),
+        AutopostApi.status(projectId),
       ]);
       setTeleStatus(status);
       setChannels(ch);
       setSources(src);
+      setAutopost(auto);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -105,6 +111,49 @@ export default function ProjectStartPage() {
     }
   };
 
+  const planToday = async () => {
+    if (!projectId) return;
+    setLoading(true);
+    setError(null);
+    setInfo(null);
+    try {
+      const res = await PlanApi.planToday(projectId);
+      setInfo(`План обновлён. Запланировано постов: ${res.planned}.`);
+      const auto = await AutopostApi.status(projectId);
+      setAutopost(auto);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const runOnce = async () => {
+    if (!projectId) return;
+    setLoading(true);
+    setError(null);
+    setInfo(null);
+    try {
+      const res = await PlanApi.runOnce(projectId);
+      setInfo(`Автопостинг запущен вручную. Обработано: ${res.processed}.`);
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const refreshAutopost = async () => {
+    if (!projectId) return;
+    try {
+      const auto = await AutopostApi.status(projectId);
+      setAutopost(auto);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
   const enabledChannels = channels.filter((c) => c.enabled).length;
   const enabledSources = sources.filter((s) => s.enabled).length;
   const teleLabel = teleStatus?.status ?? "—";
@@ -117,12 +166,48 @@ export default function ProjectStartPage() {
           <div>
             <h2 style={{ marginBottom: 4 }}>Старт / Настройка</h2>
             <div className="muted">
-              Следуйте блокам ниже: подключите Telegram, выберите каналы, обновите RSS, посмотрите превью и опубликуйте.
+              Шаги: 1) подключите Telegram по QR на вкладке «Telegram», 2) найдите и включите свои каналы, 3) обновите RSS-ленты, 4) убедитесь что автопостинг активен (карточка ниже), 5) посмотрите превью и опубликуйте.
             </div>
           </div>
 
           {error && <div className="badge" style={{ background: "#b91c1c" }}>{error}</div>}
           {info && <div className="badge" style={{ background: "#065f46" }}>{info}</div>}
+
+          <div className="card grid" style={{ gap: 12 }}>
+            <div className="row" style={{ alignItems: "center", gap: 8 }}>
+              <div className="badge" style={{ background: "#1f2937" }}>Автопостинг</div>
+              <div style={{ fontWeight: 700 }}>
+                Воркер: {autopost ? (autopost.worker_online ? "онлайн" : "офлайн") : "—"}
+              </div>
+            </div>
+            <div className="muted">
+              Следующий пост:{" "}
+              {autopost
+                ? autopost.next_post_at
+                  ? `${new Date(autopost.next_post_at).toLocaleString("ru-RU", { timeZone: "Europe/Moscow" })} (${autopost.next_post_kind === "prediction" ? "прогнозы" : "новости"})`
+                  : "план отсутствует — создайте его на сегодня"
+                : "загружаем..."}
+              . В очереди: {autopost ? autopost.planned_total : "—"}. Последняя публикация:{" "}
+              {autopost && autopost.last_published_at
+                ? new Date(autopost.last_published_at).toLocaleString("ru-RU", { timeZone: "Europe/Moscow" })
+                : "—"}.
+            </div>
+            <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+              <button className="btn secondary" onClick={refreshAutopost} disabled={loading}>
+                Обновить статус
+              </button>
+              <button className="btn secondary" onClick={planToday} disabled={loading}>
+                Сформировать план на сегодня
+              </button>
+              <button className="btn secondary" onClick={runOnce} disabled={loading}>
+                Запустить обработку сейчас
+              </button>
+            </div>
+            <div className="muted" style={{ fontSize: 12 }}>
+              Планировщик пересчитывает очередь ежедневно в 00:05 МСК. Если очередь пуста — нажмите «Сформировать план».
+              Автопубликация работает только при подключённом Telegram и активных каналах. Если воркер офлайн — перезапустите docker compose или контейнер worker.
+            </div>
+          </div>
 
           <div className="card grid" style={{ gap: 12 }}>
             <div className="row" style={{ alignItems: "center", gap: 8 }}>

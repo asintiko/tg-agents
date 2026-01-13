@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from zoneinfo import ZoneInfo
 
 from apps.api.time_utils import MSK_TZ, UTC_TZ, msk_now, to_utc
-from apps.api.models import AgentConfig, Post, PostStatus, Project
+from apps.api.models import AgentConfig, Niche, Post, PostKind, PostStatus, Project
 
 
 @dataclass(slots=True)
@@ -49,6 +49,9 @@ class PostPlanner:
         target_date = target_date or self.now_fn().date()
         day_start_msk = datetime.combine(target_date, time.min, tzinfo=MSK_TZ)
         day_end_msk = day_start_msk + timedelta(days=1)
+        project = await session.get(Project, project_id)
+        if not project:
+            return None
         cfg = await session.scalar(
             select(AgentConfig).where(AgentConfig.project_id == project_id)
         )
@@ -72,11 +75,17 @@ class PostPlanner:
             )
         )
 
-        for planned_at in times:
+        predictions_needed = (
+            project.niche == Niche.FOOTBALL and cfg.predictions_enabled and bool(times)
+        )
+
+        for idx, planned_at in enumerate(times):
+            kind = PostKind.PREDICTION if predictions_needed and idx == 0 else PostKind.NEWS
             session.add(
                 Post(
                     project_id=project_id,
                     news_item_id=None,
+                    kind=kind,
                     status=PostStatus.PLANNED,
                     planned_at=to_utc(planned_at),
                 )

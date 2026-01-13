@@ -4,7 +4,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, HttpUrl
 
-from .models import ConnectionStatus, EmojiMode, ImageMode, Niche, PostStatus
+from .models import ConnectionStatus, EmojiMode, ImageMode, Niche, PostKind, PostStatus
 
 
 class LoginRequest(BaseModel):
@@ -37,6 +37,8 @@ class AgentConfigUpdate(BaseModel):
     tone: str = Field(default="neutral")
     signature_html: str | None = None
     emoji_mode: EmojiMode = EmojiMode.OFF
+    predictions_enabled: bool = True
+    gemini_web_search: bool = False
     brand_emoji_id: str | None = None
     brand_emoji_fallback: str | None = "⚽"
     premium_emoji_id: int | None = None
@@ -87,6 +89,7 @@ class PostOut(BaseModel):
     id: int
     project_id: int
     news_item_id: int | None
+    kind: PostKind
     status: PostStatus
     planned_at: datetime
     published_at: datetime | None
@@ -202,3 +205,12 @@ class TelegramChannelsListOut(TelegramDiscoveredChannel):
     project_id: int
 
     model_config = {"from_attributes": True}
+
+
+class AutopostStatusOut(BaseModel):
+    worker_online: bool
+    last_heartbeat: datetime | None
+    next_post_at: datetime | None
+    next_post_kind: PostKind | None
+    planned_total: int
+    last_published_at: datetime | None

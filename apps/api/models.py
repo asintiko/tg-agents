@@ -55,6 +55,11 @@ class PostStatus(str, enum.Enum):
     FAILED = "failed"
 
 
+class PostKind(str, enum.Enum):
+    NEWS = "news"
+    PREDICTION = "prediction"
+
+
 def enum_values(enum_cls: type[enum.Enum]) -> list[str]:
     return [member.value for member in enum_cls]
 
@@ -122,6 +127,8 @@ class AgentConfig(Base):
         Enum(EmojiMode, values_callable=enum_values, name="emojimode"),
         default=EmojiMode.OFF,
     )
+    predictions_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    gemini_web_search: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     brand_emoji_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     brand_emoji_fallback: Mapped[str | None] = mapped_column(String(16), default="⚽", nullable=True)
     premium_emoji_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -231,6 +238,11 @@ class Post(Base):
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
     news_item_id: Mapped[int | None] = mapped_column(
         ForeignKey("news_items.id", ondelete="SET NULL"), nullable=True
+    )
+    kind: Mapped[PostKind] = mapped_column(
+        Enum(PostKind, values_callable=enum_values, name="postkind"),
+        default=PostKind.NEWS,
+        nullable=False,
     )
     status: Mapped[PostStatus] = mapped_column(
         Enum(PostStatus, values_callable=enum_values, name="poststatus"),

@@ -24,6 +24,12 @@ def _sample_config(
         tone="neutral",
         signature_html=signature_html,
         emoji_mode=EmojiMode.BASIC,
+        predictions_enabled=True,
+        gemini_web_search=False,
+        brand_emoji_id=None,
+        brand_emoji_fallback="⚽",
+        premium_emoji_id=None,
+        premium_emoji_fallback="⚡",
         include_source_link=include_source_link,
         image_mode=ImageMode.WIKIMEDIA,
     )
@@ -65,7 +71,8 @@ async def test_generate_truncates_and_appends_link(monkeypatch: pytest.MonkeyPat
 
     assert len(post.body_html) <= 900
     assert "script" not in post.body_html.lower()
-    assert "Источник: <a href=\"https://example.com/article\">" in post.body_html
+    assert '<a href="https://example.com/article">Подробнее</a>' in post.body_html
+    assert "Источник" not in post.body_html
     assert "#football" in post.body_html
     assert "---" in post.body_html
 

@@ -4,11 +4,13 @@ import asyncio
 import logging
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from apps.api.config import get_settings
 from apps.api.db import init_engine, init_sessionmaker
 from apps.api.logging_config import configure_logging
 from apps.api.time_utils import MSK_TZ
+from apps.api.models import Heartbeat
 from apps.worker.pipeline import PostPipeline
 from apps.worker.planner import PostPlanner
 from apps.worker.rss import RSSCollector
@@ -19,6 +21,12 @@ logger = logging.getLogger(__name__)
 
 def get_worker_status() -> str:
     return "worker alive"
+
+
+async def _write_heartbeat(session_maker: async_sessionmaker) -> None:
+    async with session_maker() as session:
+        session.add(Heartbeat(note="worker"))
+        await session.commit()
 
 
 async def run_scheduler() -> None:
@@ -35,6 +43,7 @@ async def run_scheduler() -> None:
     scheduler.add_job(collector.pull_all, "interval", minutes=5, coalesce=True)
     scheduler.add_job(planner.plan_all_projects, "cron", hour=0, minute=5, coalesce=True)
     scheduler.add_job(pipeline.run, "interval", seconds=60, coalesce=True)
+    scheduler.add_job(_write_heartbeat, "interval", seconds=30, args=[session_maker], coalesce=True)
     scheduler.start()
     logger.info(get_worker_status())
     try:

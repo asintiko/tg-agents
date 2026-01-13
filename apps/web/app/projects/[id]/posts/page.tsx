@@ -135,6 +135,7 @@ export default function PostsPage() {
                 <thead>
                   <tr>
                     <th>ID</th>
+                    <th>Тип</th>
                     <th>Статус</th>
                     <th>Запланировано (МСК)</th>
                     <th>Опубликовано (МСК)</th>
@@ -145,6 +146,7 @@ export default function PostsPage() {
                   {posts.map((p) => (
                     <tr key={p.id}>
                       <td>{p.id}</td>
+                      <td>{p.kind === "prediction" ? "Прогноз" : "Новость"}</td>
                       <td>{p.status}</td>
                       <td>{formatDate(p.planned_at)}</td>
                       <td>{formatDate(p.published_at)}</td>
